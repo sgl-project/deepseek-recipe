@@ -19,6 +19,9 @@ them to a commit of this repository.
     inside the manylinux images, and for `macosx_11_0_arm64` and
     `macosx_11_0_x86_64`, each repaired with `auditwheel` or `delocate`.
 
+  The minimal build disables AVIF so macOS wheels do not inherit unrelated
+  multimedia libraries with newer deployment targets.
+
   Each wheel is installed by name in a fresh environment on Python 3.10 and
   3.14, on a runner without OpenCV, and runs the binding tests. The `release`
   artifact holds the distributions, `SHA256SUMS`, and `build-info.json`, which
