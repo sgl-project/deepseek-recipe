@@ -11,11 +11,16 @@ inference, tool execution, and HTTP transport.
 Python 3.10 or later:
 
 ```sh
-python3 -m pip install deepseek-recipe
+python3 -m pip install sgl-deepseek-recipe
 ```
 
 Import as `deepseek_recipe`. Source builds require Rust, OpenCV 4.x, and
 Clang/libclang.
+
+`sgl-deepseek-recipe` is SGLang's build of
+[deepseek-recipe](https://github.com/sgl-project/deepseek-recipe). It installs
+the same `deepseek_recipe` package as the upstream `deepseek-recipe`
+distribution, so install only one of the two.
 
 ## Example
 

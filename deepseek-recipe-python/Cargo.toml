@@ -1,6 +1,7 @@
 [package]
 name = "deepseek-recipe-python"
-version.workspace = true
+# sgl-deepseek-recipe has its own version series; the library crates keep the workspace's.
+version = "0.2.1"
 edition = "2024"
 description = "Python bindings for deepseek-recipe components."
 readme = "README.md"

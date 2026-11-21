@@ -1,12 +1,20 @@
 # Changelog
 
-This file lists the changes to the Rust crates and to the `deepseek-recipe`
-Python distribution. All crates and the distribution share one version. The
-format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
-versions follow [Semantic Versioning](https://semver.org/): before 1.0, a new
-minor version can contain incompatible changes.
+This file lists the changes to the Rust crates and to the Python distribution,
+published as `sgl-deepseek-recipe`. All crates share one version, and the
+distribution has its own. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
+[Semantic Versioning](https://semver.org/): before 1.0, a new minor version can
+contain incompatible changes.
 
 ## Unreleased
+
+### Changed
+
+- The Python distribution is published as `sgl-deepseek-recipe` 0.2.1. The
+  import name stays `deepseek_recipe`, and the Rust crates stay at 0.2.0.
+  `sgl-deepseek-recipe` and `deepseek-recipe` install the same package; install
+  only one of them.
 
 ### Added
 
