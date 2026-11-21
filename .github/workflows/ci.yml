@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config cmake clang libclang-dev
+
+      - name: Use OpenCV
+        run: |
+          prefix=$HOME/opencv-min
+          {
+            echo "OPENCV_PREFIX=$prefix"
+            echo "OPENCV_INCLUDE_PATHS=$prefix/include/opencv4"
+            echo "OPENCV_LINK_PATHS=$prefix/lib"
+            echo "OPENCV_LINK_LIBS=opencv_core,opencv_imgproc,opencv_imgcodecs"
+            echo "LD_LIBRARY_PATH=$prefix/lib"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore OpenCV
+        id: opencv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.OPENCV_PREFIX }}
+          key: opencv-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/build-opencv.sh') }}
+
+      - name: Build OpenCV
+        if: steps.opencv.outputs.cache-hit != 'true'
+        run: .github/scripts/build-opencv.sh "$OPENCV_PREFIX"
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo check -p deepseek-recipe-image --no-default-features --locked
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.10"
+
+      - name: Python tests
+        run: |
+          python -m venv .venv
+          . .venv/bin/activate
+          pip install 'maturin>=1.9,<2' 'pytest>=8,<10' httpx -r server-py/requirements.txt
+          maturin develop --manifest-path deepseek-recipe-python/Cargo.toml --locked
+          python -m pytest deepseek-recipe-python/tests server-py/tests
