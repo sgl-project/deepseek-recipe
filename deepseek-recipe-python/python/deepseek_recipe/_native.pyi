@@ -518,6 +518,14 @@ class ConversationRequest:
     @property
     def stream(self) -> bool:
         """Whether the protocol request asks for a streamed response."""
+    @property
+    def namespace_tool_map(self) -> dict[str, tuple[str, str]] | None:
+        """The function names of the Responses namespace tools.
+
+        Each function name maps to `(namespace, local name)`, as conversion
+        assigned them, including the tools that search results load. `None` for
+        a request that Responses conversion did not produce.
+        """
     def resolve_max_tokens(self, prompt_tokens: int, context_limit: int) -> int:
         """Resolve the `max_tokens` to send to the backend.
 

@@ -482,6 +482,15 @@ impl PyConversationRequest {
         self.inner.stream
     }
 
+    /// The function names of the Responses namespace tools mapped to
+    /// `(namespace, local name)`, as conversion assigned them, including the
+    /// tools that search results load. `None` for a request that Responses
+    /// conversion did not produce.
+    #[getter]
+    fn namespace_tool_map(&self) -> Option<HashMap<String, (String, String)>> {
+        self.inner.response_options.namespace_tool_map.clone()
+    }
+
     /// Resolve the `max_tokens` to send to the backend.
     ///
     /// `prompt_tokens` is the number of tokens in the encoded prompt, with each

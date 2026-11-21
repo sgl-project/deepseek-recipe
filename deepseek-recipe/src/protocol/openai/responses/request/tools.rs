@@ -18,16 +18,35 @@ use super::schema::{
 };
 
 /// The namespace and local name of a namespace tool.
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(super) struct ResponsesNamespaceToolName {
     namespace: String,
     local_name: String,
+}
+
+/// The declared kind of a registered tool definition.
+#[derive(PartialEq)]
+enum RegisteredToolKind {
+    Function(String),
+    Custom(String),
+    Namespace(ResponsesNamespaceToolName),
+}
+
+/// The kind and definition of a registered function, custom, or namespace
+/// tool.
+struct RegisteredTool {
+    kind: RegisteredToolKind,
+    description: Option<String>,
+    parameters: Option<serde_json::Value>,
+    strict: Option<bool>,
 }
 
 /// The tool declarations of a request after name validation, with namespace
 /// tools flattened into uniquely named functions.
 pub(super) struct ResponsesToolSet {
     client_tools: Vec<ClientToolDeclaration>,
+    registered_tools: Vec<RegisteredTool>,
+    has_tool_search: bool,
     /// Namespace tools in registration order: the function name and its
     /// namespace and local name. The order keeps
     /// [`Self::convert_function_call`] deterministic when duplicate namespaces
@@ -42,6 +61,10 @@ pub(super) struct ResponsesToolSet {
 impl ResponsesToolSet {
     /// Validate tool names, flatten namespaces, and replace `apply_patch` with
     /// its function tool.
+    ///
+    /// A search result that repeats the definition of a registered function,
+    /// `apply_patch`, or namespace tool exactly reuses that registration and
+    /// loads no tool.
     ///
     /// # Errors
     ///
@@ -70,6 +93,8 @@ impl ResponsesToolSet {
         }
         let mut converted = Self {
             client_tools: Vec::new(),
+            registered_tools: Vec::new(),
+            has_tool_search: false,
             namespace_tools: Vec::new(),
             discovered_tools: HashMap::new(),
             top_level_names: groups
@@ -85,6 +110,7 @@ impl ResponsesToolSet {
         };
         for (item_index, tools) in groups {
             let start = converted.client_tools.len();
+            let discovered = item_index.is_some();
             for (index, tool) in tools.into_iter().enumerate() {
                 let path = item_index.map_or_else(
                     || format!("tools[{index}]"),
@@ -93,7 +119,14 @@ impl ResponsesToolSet {
                 match tool {
                     ResponsesTool::Function(function) => {
                         validate_tool_name(&function.name, &path)?;
-                        converted.client_tools.push(function.into());
+                        let kind = RegisteredToolKind::Function(function.name.clone());
+                        let declaration = function.into();
+                        if converted
+                            .registered_repeat(discovered, &kind, &declaration)
+                            .is_none()
+                        {
+                            converted.register(kind, declaration);
+                        }
                     }
                     ResponsesTool::Namespace {
                         name,
@@ -101,7 +134,7 @@ impl ResponsesToolSet {
                         tools,
                     } => {
                         validate_tool_name(&name, &path)?;
-                        let mut inner_names = HashSet::new();
+                        let mut inner_names = HashMap::new();
                         for (inner_index, tool) in tools.into_iter().enumerate() {
                             let mut function = match tool {
                                 ResponsesNamespaceTool::Function(function) => function,
@@ -114,11 +147,6 @@ impl ResponsesToolSet {
                             };
                             let inner_path = format!("{path}.tools[{inner_index}]");
                             validate_tool_name(&function.name, &inner_path)?;
-                            if !inner_names.insert(function.name.clone()) {
-                                return Err(ConversionError::bad_request(
-                                    "Tool names within a namespace must be unique.",
-                                ));
-                            }
                             if model_version == ModelVersion::DeepseekV41Flash
                                 && let Some(namespace_description) = description
                                     .as_deref()
@@ -130,19 +158,36 @@ impl ResponsesToolSet {
                                     "{namespace_description}\n{function_description}"
                                 ));
                             }
-                            let function_name = unique_name(
-                                join_namespace(&name, &function.name, model_version),
+                            let tool_name = ResponsesNamespaceToolName {
+                                namespace: name.clone(),
+                                local_name: function.name.clone(),
+                            };
+                            let kind = RegisteredToolKind::Namespace(tool_name.clone());
+                            let mut declaration = ClientToolDeclaration::from(function);
+                            let repeat =
+                                converted.registered_repeat(discovered, &kind, &declaration);
+                            let registration = repeat.unwrap_or(converted.registered_tools.len());
+                            // A namespace may list a name again only as an exact repeat of
+                            // the registration that the name already has in it.
+                            if inner_names
+                                .insert(tool_name.local_name.clone(), registration)
+                                .is_some_and(|previous| Some(previous) != repeat)
+                            {
+                                return Err(ConversionError::bad_request(
+                                    "Tool names within a namespace must be unique.",
+                                ));
+                            }
+                            if repeat.is_some() {
+                                continue;
+                            }
+                            declaration.name = unique_name(
+                                join_namespace(&name, &tool_name.local_name, model_version),
                                 |candidate| converted.is_name_taken(candidate),
                             );
-                            converted.namespace_tools.push((
-                                function_name.clone(),
-                                ResponsesNamespaceToolName {
-                                    namespace: name.clone(),
-                                    local_name: function.name,
-                                },
-                            ));
-                            function.name = function_name;
-                            converted.client_tools.push(function.into());
+                            converted
+                                .namespace_tools
+                                .push((declaration.name.clone(), tool_name));
+                            converted.register(kind, declaration);
                         }
                     }
                     ResponsesTool::Custom { name } => {
@@ -151,7 +196,14 @@ impl ResponsesToolSet {
                                 "Unsupported custom tool: '{name}'. Only 'apply_patch' is supported."
                             )));
                         }
-                        converted.client_tools.push(apply_patch_tool(model_version));
+                        let kind = RegisteredToolKind::Custom(name.clone());
+                        let declaration = apply_patch_tool(model_version);
+                        if converted
+                            .registered_repeat(discovered, &kind, &declaration)
+                            .is_none()
+                        {
+                            converted.register(kind, declaration);
+                        }
                         converted.response_options.custom_tool_names.insert(name);
                     }
                     ResponsesTool::ToolSearch {
@@ -164,6 +216,7 @@ impl ResponsesToolSet {
                         converted.response_options.client_tool_search |=
                             item_index.is_none() && client_tool_search;
                         if model_version.supports_mid_conversation_system() && client_tool_search {
+                            converted.has_tool_search = true;
                             converted.client_tools.push(ClientToolDeclaration {
                                 name: "tool_search".to_string(),
                                 description,
@@ -217,6 +270,12 @@ impl ResponsesToolSet {
     /// Return whether at least one tool definition was converted.
     pub(super) fn has_tools(&self) -> bool {
         !self.client_tools.is_empty()
+    }
+
+    /// Return the name of the client `tool_search` definition, which the
+    /// protocol rather than the user declares, when the request has one.
+    pub(super) fn tool_search_name(&self) -> Option<&'static str> {
+        self.has_tool_search.then_some("tool_search")
     }
 
     /// Convert a historical function call into a tool call, resolving a
@@ -280,7 +339,9 @@ impl ResponsesToolSet {
     /// [`WebSearchBehavior::Reject`], then the errors of
     /// [`convert_client_tools`]: duplicate function names after namespace
     /// flattening, an invalid parameter schema, a named choice that names no
-    /// tool, or a named or `required` choice in thinking mode.
+    /// tool, or a named or `required` choice in thinking mode. Last, returns
+    /// an error for a `function` choice that names a custom tool or a `custom`
+    /// choice that names any other tool.
     pub(super) fn convert_tools(
         self,
         choice: Option<ResponsesToolChoice>,
@@ -309,15 +370,57 @@ impl ResponsesToolSet {
         if self.client_tools.is_empty() {
             return Ok((Vec::new(), ToolChoice::Auto));
         }
-        let choice = match choice {
-            Some(ResponsesToolChoice::Named(
-                ResponsesNamedToolChoice::Function { name }
-                | ResponsesNamedToolChoice::Custom { name },
-            )) => ClientToolChoice::Named(name),
-            Some(ResponsesToolChoice::Required) => ClientToolChoice::Required,
-            _ => ClientToolChoice::Auto,
+        let (choice, named_tool) = match choice {
+            Some(ResponsesToolChoice::Named(ResponsesNamedToolChoice::Function { name })) => {
+                (ClientToolChoice::Named(name.clone()), Some((name, false)))
+            }
+            Some(ResponsesToolChoice::Named(ResponsesNamedToolChoice::Custom { name })) => {
+                (ClientToolChoice::Named(name.clone()), Some((name, true)))
+            }
+            Some(ResponsesToolChoice::Required) => (ClientToolChoice::Required, None),
+            _ => (ClientToolChoice::Auto, None),
         };
-        convert_client_tools(self.client_tools, choice, thinking_mode)
+        let converted = convert_client_tools(self.client_tools, choice, thinking_mode)?;
+        if let Some((name, custom)) = named_tool
+            && self.response_options.custom_tool_names.contains(&name) != custom
+        {
+            let kind = if custom { "custom" } else { "function" };
+            return Err(ConversionError::bad_request(format!(
+                "Invalid value for 'tool_choice': '{name}' is not a {kind} tool."
+            )));
+        }
+        Ok(converted)
+    }
+
+    /// Return the index in `registered_tools` of the definition of `kind` that
+    /// `declaration` repeats, when `declaration` comes from a search result
+    /// (`discovered`). Parameter schemas compare as JSON values: key order is
+    /// ignored, and `true` differs from `1`.
+    fn registered_repeat(
+        &self,
+        discovered: bool,
+        kind: &RegisteredToolKind,
+        declaration: &ClientToolDeclaration,
+    ) -> Option<usize> {
+        if !discovered {
+            return None;
+        }
+        self.registered_tools.iter().position(|tool| {
+            tool.kind == *kind
+                && tool.description == declaration.description
+                && tool.parameters == declaration.parameters
+                && tool.strict == declaration.strict
+        })
+    }
+
+    fn register(&mut self, kind: RegisteredToolKind, declaration: ClientToolDeclaration) {
+        self.registered_tools.push(RegisteredTool {
+            kind,
+            description: declaration.description.clone(),
+            parameters: declaration.parameters.clone(),
+            strict: declaration.strict,
+        });
+        self.client_tools.push(declaration);
     }
 
     fn is_name_taken(&self, candidate: &str) -> bool {

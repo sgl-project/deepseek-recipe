@@ -93,7 +93,7 @@ impl ProtocolRequest for MessagesRequest {
         let (tools, tool_choice) = convert_tools(tool_set, self.tool_choice, thinking_mode)?;
         normalize_message_tools(&mut messages, &tools);
         let output_constraint =
-            resolve_output_constraint(&tools, tool_choice, &ResponseFormat::Text, false)?;
+            resolve_output_constraint(&tools, None, tool_choice, &ResponseFormat::Text, false)?;
         let stop_sequences = self.stop_sequences.unwrap_or_default();
         validate_stop_sequences(&stop_sequences)?;
         let mut inference_options = RawInferenceOptions {

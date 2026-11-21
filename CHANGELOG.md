@@ -8,6 +8,25 @@ minor version can contain incompatible changes.
 
 ## Unreleased
 
+### Added
+
+- Python `ConversationRequest.namespace_tool_map` returns the namespace tool
+  names that Responses conversion assigned, including those of tools that
+  search results load.
+
+### Fixed
+
+- A Responses `tool_search_output` that repeats the exact definition of a
+  function, `apply_patch`, or namespace tool already declared in `tools` or
+  returned by a search reuses that tool instead of failing with `Tool names must
+  be unique.` or adding a numbered namespace tool. Its tool result still lists
+  every returned tool. A changed function definition is still rejected, and a
+  changed namespace tool still gets a numbered name.
+- Strict Responses function and namespace tools convert beside the client
+  `tool_search` tool, which no longer counts as a non-strict tool.
+- A Responses `function` tool choice that names `apply_patch` and a `custom`
+  tool choice that names a function are rejected.
+
 ## 0.2.0 - 2026-10-20
 
 This release changes the public API of every crate and of the Python package.

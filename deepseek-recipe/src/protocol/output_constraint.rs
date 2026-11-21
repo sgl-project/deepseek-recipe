@@ -8,7 +8,10 @@ use crate::request::{ConversionError, OutputConstraint};
 /// Select the output constraint of a converted request. Whether the backend
 /// applies it is the caller's decision.
 ///
-/// `tools` and `tool_choice` are the converted client tools. `response_format`
+/// `tools` and `tool_choice` are the converted client tools, and
+/// `protocol_tool` names a definition among `tools` that the protocol adds
+/// rather than the user, such as the Responses client `tool_search`; the
+/// strictness checks skip it. `response_format`
 /// is the format for the constraint: a strict `json_schema` carries its
 /// normalized schema here, while the conversation keeps the schema as written.
 /// `has_response_format` is whether the request specified a response format at
@@ -22,18 +25,24 @@ use crate::request::{ConversionError, OutputConstraint};
 /// # Errors
 ///
 /// Returns [`ConversionError::BadRequest`] when `tools` is not empty,
-/// `tool_choice` is not `none`, and either the tools mix strict and
-/// non-strict definitions or all are strict and `has_response_format` is
-/// `true`.
+/// `tool_choice` is not `none`, and either the tools other than
+/// `protocol_tool` mix strict and non-strict definitions or all of them are
+/// strict and `has_response_format` is `true`.
 pub(crate) fn resolve_output_constraint(
     tools: &[ToolDefinition],
+    protocol_tool: Option<&str>,
     tool_choice: ToolChoice,
     response_format: &ResponseFormat,
     has_response_format: bool,
 ) -> Result<Option<OutputConstraint>, ConversionError> {
     if !tools.is_empty() && tool_choice != ToolChoice::None {
-        if tools.iter().any(|tool| tool.strict == Some(true)) {
-            if tools.iter().any(|tool| tool.strict != Some(true)) {
+        let user_tools = || {
+            tools
+                .iter()
+                .filter(|tool| Some(tool.name.as_str()) != protocol_tool)
+        };
+        if user_tools().any(|tool| tool.strict == Some(true)) {
+            if user_tools().any(|tool| tool.strict != Some(true)) {
                 return Err(ConversionError::bad_request(
                     "Cannot use strict tool with non-strict tool in the same request",
                 ));

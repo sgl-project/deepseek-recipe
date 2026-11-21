@@ -802,12 +802,14 @@ impl ProtocolRequest for ResponsesRequest {
             responses_echo: Some(echo),
             ..tool_set.response_options.clone()
         };
+        let tool_search_name = tool_set.tool_search_name();
         let (tools, tool_choice) =
             tool_set.convert_tools(self.tool_choice, thinking_mode, &options)?;
         normalize_message_tools(&mut messages, &tools);
         let (response_format, constraint_format) = convert_text_format(self.text, &messages)?;
         let output_constraint = resolve_output_constraint(
             &tools,
+            tool_search_name,
             tool_choice,
             &constraint_format,
             !matches!(response_format, ResponseFormat::Text),
@@ -971,6 +973,7 @@ fn convert_text_format(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::request::OutputConstraint;
 
     fn request() -> ResponsesRequest {
         serde_json::from_value(serde_json::json!({
@@ -1003,5 +1006,384 @@ mod tests {
                 .to_string(),
             expected
         );
+    }
+
+    fn convert(request: serde_json::Value) -> Result<ConversationRequest, ConversionError> {
+        serde_json::from_value::<ResponsesRequest>(request)
+            .expect("the request deserializes")
+            .convert(ConversionOptions::new())
+    }
+
+    fn convert_err(request: serde_json::Value) -> String {
+        convert(request)
+            .expect_err("the request is rejected")
+            .to_string()
+    }
+
+    /// A V4.1 request without thinking whose input runs one client tool search
+    /// for each of `results`, the tools that the searches return.
+    fn search_request(
+        tools: serde_json::Value,
+        results: &[serde_json::Value],
+    ) -> serde_json::Value {
+        let mut input = vec![serde_json::json!({"role": "user", "content": "Find the tools."})];
+        for (index, result) in results.iter().enumerate() {
+            let call_id = format!("search_{index}");
+            input.push(serde_json::json!({
+                "type": "tool_search_call",
+                "call_id": call_id,
+                "execution": "client",
+                "arguments": {"query": "tools"},
+            }));
+            input.push(serde_json::json!({
+                "type": "tool_search_output",
+                "call_id": call_id,
+                "execution": "client",
+                "tools": result,
+            }));
+        }
+        serde_json::json!({
+            "model": "DeepSeek-V4.1-Flash",
+            "input": input,
+            "reasoning": {"effort": "none"},
+            "tools": tools,
+        })
+    }
+
+    fn names(tools: &[ToolDefinition]) -> Vec<&str> {
+        tools.iter().map(|tool| tool.name.as_str()).collect()
+    }
+
+    /// The names of the tools that each system message loads.
+    fn loaded_names(messages: &[InputMessage]) -> Vec<Vec<&str>> {
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                InputMessage::System {
+                    tools: Some(tools), ..
+                } => Some(names(tools)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn tool_results(messages: &[InputMessage]) -> Vec<&str> {
+        messages
+            .iter()
+            .filter_map(|message| match message {
+                InputMessage::Tool { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn function(
+        name: &str,
+        open: serde_json::Value,
+        archived: serde_json::Value,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "type": "function",
+            "name": name,
+            "description": "Look up an order.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "open": {"type": "boolean", "default": open},
+                    "archived": {"type": "boolean", "default": archived},
+                },
+            },
+            "strict": null,
+        })
+    }
+
+    fn namespace(tools: &[serde_json::Value]) -> serde_json::Value {
+        serde_json::json!({"type": "namespace", "name": "crm", "description": "CRM.", "tools": tools})
+    }
+
+    #[test]
+    fn search_results_reuse_exact_function_and_apply_patch_definitions() {
+        let lookup = function("lookup", true.into(), false.into());
+        let mut reordered = lookup.clone();
+        reordered["parameters"] = serde_json::json!({
+            "properties": {
+                "archived": {"default": false, "type": "boolean"},
+                "open": {"default": true, "type": "boolean"},
+            },
+            "type": "object",
+        });
+        let create = function("create_ticket", true.into(), false.into());
+        let close = function("close_ticket", true.into(), false.into());
+        let apply_patch = serde_json::json!({"type": "custom", "name": "apply_patch"});
+        let tools = serde_json::json!([
+            {"type": "tool_search", "execution": "client"},
+            lookup,
+            apply_patch,
+        ]);
+        let results = [
+            serde_json::json!([reordered, create, create, apply_patch]),
+            serde_json::json!([create, close]),
+        ];
+        let request = convert(search_request(tools.clone(), &results))
+            .expect("exact repeats reuse their definitions");
+        let conversation = &request.conversation;
+        assert_eq!(
+            names(&conversation.tools),
+            [
+                "tool_search",
+                "lookup",
+                "apply_patch",
+                "create_ticket",
+                "close_ticket"
+            ]
+        );
+        assert_eq!(
+            loaded_names(&conversation.messages),
+            [["create_ticket"], ["close_ticket"]]
+        );
+        assert_eq!(
+            tool_results(&conversation.messages),
+            results.map(|result| result.to_string())
+        );
+
+        let apply_patch_tool = &conversation.tools[2];
+        let apply_patch_function = serde_json::json!({
+            "type": "function",
+            "name": "apply_patch",
+            "description": apply_patch_tool.description,
+            "parameters": apply_patch_tool.parameters,
+        });
+        for repeat in [
+            function("lookup", 1.into(), false.into()),
+            function("lookup", true.into(), 0.into()),
+            apply_patch_function,
+        ] {
+            assert_eq!(
+                convert_err(search_request(
+                    tools.clone(),
+                    &[serde_json::json!([repeat])]
+                )),
+                "Tool names must be unique."
+            );
+        }
+    }
+
+    #[test]
+    fn search_results_reuse_exact_namespace_tools_and_version_changed_ones() {
+        let lookup = |open, archived| function("lookup", open, archived);
+        let create = serde_json::json!({"type": "function", "name": "create"});
+        let note = function("note", true.into(), false.into());
+        let same_namespace = [
+            note.clone(),
+            note,
+            lookup(true.into(), false.into()),
+            lookup(true.into(), false.into()),
+        ];
+        let tools = serde_json::json!([
+            {"type": "tool_search", "execution": "client"},
+            namespace(&[lookup(true.into(), false.into())]),
+        ]);
+        let results = [
+            serde_json::json!([namespace(&[
+                lookup(true.into(), false.into()),
+                create.clone()
+            ])]),
+            serde_json::json!([
+                namespace(std::slice::from_ref(&create)),
+                namespace(&[lookup(true.into(), false.into())])
+            ]),
+            serde_json::json!([
+                namespace(&[lookup(1.into(), false.into())]),
+                namespace(&[lookup(true.into(), 0.into())]),
+            ]),
+            serde_json::json!([namespace(&[lookup(1.into(), false.into())])]),
+            serde_json::json!([namespace(&same_namespace)]),
+        ];
+        let request =
+            convert(search_request(tools.clone(), &results)).expect("the namespace tools convert");
+        let conversation = &request.conversation;
+        assert_eq!(
+            names(&conversation.tools),
+            [
+                "tool_search",
+                "crm::lookup",
+                "crm::create",
+                "crm::lookup_1",
+                "crm::lookup_2",
+                "crm::note"
+            ]
+        );
+        assert_eq!(
+            loaded_names(&conversation.messages),
+            [
+                vec!["crm::create"],
+                vec!["crm::lookup_1", "crm::lookup_2"],
+                vec!["crm::note"]
+            ]
+        );
+        let namespace_tools = request
+            .response_options
+            .namespace_tool_map
+            .expect("conversion maps namespace tools");
+        assert_eq!(namespace_tools.len(), 5);
+        assert_eq!(
+            namespace_tools["crm::lookup_2"],
+            ("crm".to_owned(), "lookup".to_owned())
+        );
+        let result_texts = tool_results(&conversation.messages);
+        let flattened: Vec<_> = same_namespace
+            .iter()
+            .map(|member| {
+                let mut member = member.clone();
+                member["namespace"] = serde_json::json!({"name": "crm", "description": "CRM."});
+                member
+            })
+            .collect();
+        assert_eq!(
+            result_texts[4],
+            serde_json::Value::Array(flattened).to_string()
+        );
+        let defaults: Vec<Vec<_>> = result_texts[..4]
+            .iter()
+            .map(|content| {
+                let entries: serde_json::Value =
+                    serde_json::from_str(content).expect("a tool result lists tools");
+                entries
+                    .as_array()
+                    .expect("a tool result is an array")
+                    .iter()
+                    .map(|entry| {
+                        let properties = &entry["parameters"]["properties"];
+                        (
+                            properties["open"]["default"].clone(),
+                            properties["archived"]["default"].clone(),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let null = serde_json::Value::Null;
+        assert_eq!(
+            defaults,
+            [
+                vec![(true.into(), false.into()), (null.clone(), null.clone())],
+                vec![(null.clone(), null), (true.into(), false.into())],
+                vec![(1.into(), false.into()), (true.into(), 0.into())],
+                vec![(1.into(), false.into())],
+            ]
+        );
+
+        let exact = lookup(true.into(), false.into());
+        let changed = lookup(1.into(), false.into());
+        let unique = "Tool names within a namespace must be unique.";
+        for members in [[exact.clone(), changed.clone()], [changed, exact.clone()]] {
+            let results = [serde_json::json!([namespace(&members)])];
+            assert_eq!(convert_err(search_request(tools.clone(), &results)), unique);
+        }
+        let declared_twice = serde_json::json!([namespace(&[exact.clone(), exact])]);
+        assert_eq!(convert_err(search_request(declared_twice, &[])), unique);
+    }
+
+    #[test]
+    fn strict_tools_convert_beside_client_tool_search() {
+        let search_parameters = serde_json::json!({
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+        });
+        let strict = |name: &str| {
+            serde_json::json!({
+                "type": "function",
+                "name": name,
+                "parameters": {"type": "object", "properties": {"id": {"type": "string"}}},
+                "strict": true,
+            })
+        };
+        let tools = |extra: &[serde_json::Value]| {
+            let mut tools = vec![
+                serde_json::json!({
+                    "type": "tool_search",
+                    "execution": "client",
+                    "parameters": search_parameters,
+                }),
+                strict("lookup"),
+                namespace(&[strict("note")]),
+            ];
+            tools.extend_from_slice(extra);
+            serde_json::Value::Array(tools)
+        };
+        let discovered = [serde_json::json!([strict("create")])];
+        let request = convert(search_request(tools(&[]), &discovered))
+            .expect("strict tools convert beside the search tool");
+        let Some(OutputConstraint::ToolCalls {
+            tools: constraint_tools,
+            required: false,
+        }) = request.inference_options.output_constraint
+        else {
+            panic!("the constraint is an optional tool call block");
+        };
+        assert_eq!(constraint_tools, request.conversation.tools);
+        assert_eq!(
+            names(&constraint_tools),
+            ["tool_search", "lookup", "crm::note", "create"]
+        );
+        assert_eq!(constraint_tools[0].strict, None);
+        assert_eq!(constraint_tools[0].parameters, search_parameters);
+        for tool in &constraint_tools[1..] {
+            assert_eq!(tool.strict, Some(true));
+            assert_eq!(tool.parameters["required"], serde_json::json!(["id"]));
+            assert_eq!(tool.parameters["additionalProperties"], false);
+        }
+
+        let mixed = "Cannot use strict tool with non-strict tool in the same request";
+        let plain = serde_json::json!({"type": "function", "name": "ping"});
+        assert_eq!(
+            convert_err(search_request(
+                tools(std::slice::from_ref(&plain)),
+                &discovered
+            )),
+            mixed
+        );
+        assert_eq!(
+            convert_err(search_request(tools(&[]), &[serde_json::json!([plain])])),
+            mixed
+        );
+        let user_search = serde_json::json!({"type": "function", "name": "tool_search"});
+        assert_eq!(
+            convert_err(search_request(tools(&[user_search]), &discovered)),
+            "Tool names must be unique."
+        );
+    }
+
+    #[test]
+    fn a_named_tool_choice_must_name_a_tool_of_its_type() {
+        let lookup = serde_json::json!({"type": "function", "name": "lookup"});
+        let apply_patch = serde_json::json!({"type": "custom", "name": "apply_patch"});
+        let declared = search_request(serde_json::json!([lookup, apply_patch]), &[]);
+        let discovered = search_request(
+            serde_json::json!([{"type": "tool_search", "execution": "client"}]),
+            &[serde_json::json!([lookup, apply_patch])],
+        );
+        let with_choice = |request: &serde_json::Value, kind: &str, name: &str| {
+            let mut request = request.clone();
+            request["tool_choice"] = serde_json::json!({"type": kind, "name": name});
+            request
+        };
+        for request in [declared, discovered] {
+            assert_eq!(
+                convert_err(with_choice(&request, "function", "apply_patch")),
+                "Invalid value for 'tool_choice': 'apply_patch' is not a function tool."
+            );
+            assert_eq!(
+                convert_err(with_choice(&request, "custom", "lookup")),
+                "Invalid value for 'tool_choice': 'lookup' is not a custom tool."
+            );
+            for (kind, name) in [("function", "lookup"), ("custom", "apply_patch")] {
+                let conversation = convert(with_choice(&request, kind, name))
+                    .expect("the choice names a tool of its type")
+                    .conversation;
+                assert_eq!(names(&conversation.tools), [name]);
+                assert_eq!(conversation.tool_choice, ToolChoice::Required);
+            }
+        }
     }
 }

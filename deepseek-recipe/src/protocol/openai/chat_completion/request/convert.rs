@@ -128,6 +128,7 @@ impl ProtocolRequest for ChatCompletionRequest {
         };
         let output_constraint = resolve_output_constraint(
             &tools,
+            None,
             tool_choice,
             &constraint_format,
             has_response_format,

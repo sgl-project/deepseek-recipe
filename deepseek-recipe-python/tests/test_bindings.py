@@ -15,6 +15,7 @@ from deepseek_recipe import (
     Conversation,
     ConversionError,
     ConversionOptions,
+    ConversationRequest,
     DeepseekV4Encoding,
     DeepseekV41Encoding,
     ImageError,
@@ -960,6 +961,59 @@ def test_responses_namespace_tool_map():
         ResponsesRequest({**RESPONSES_REQUEST, "tools": [invalid]}).namespace_tool_map(
             ConversionOptions()
         )
+
+def test_converted_responses_request_reports_its_namespace_tool_map():
+    def lookup(default, name="lookup"):
+        query = {"type": "number", "default": default}
+        parameters = {"type": "object", "properties": {"q": query}}
+        return {"type": "function", "name": name, "parameters": parameters}
+
+    def crm(*members):
+        return {"type": "namespace", "name": "crm", "description": "CRM.", "tools": list(members)}
+
+    def search(call_id, *tools):
+        call = {"type": "tool_search_call", "call_id": call_id, "execution": "client"}
+        return [
+            {**call, "arguments": {}},
+            {**call, "type": "tool_search_output", "tools": list(tools)},
+        ]
+
+    sibling = lookup(0.0, "lookup_1")
+    request = ResponsesRequest(
+        {
+            **RESPONSES_REQUEST,
+            "tools": [{"type": "tool_search", "execution": "client"}, crm(lookup(-0.0))],
+            "input": [
+                {"role": "user", "content": "hi"},
+                *search("a", crm(lookup(0.0), sibling, sibling)),
+                *search("b", crm(lookup(1)), crm(lookup(1.0)), crm(lookup(-0.0))),
+            ],
+        }
+    )
+    options = ConversionOptions()
+    assert request.namespace_tool_map(options) == {"crm::lookup": ("crm", "lookup")}
+
+    converted = request.convert(options)
+    with pytest.raises(RuntimeError, match="consumed"):
+        request.namespace_tool_map(options)
+    # `0.0` and a final `-0.0` repeat the declared `-0.0`; `1` and `1.0` differ.
+    assert converted.namespace_tool_map == {
+        "crm::lookup": ("crm", "lookup"),
+        "crm::lookup_1": ("crm", "lookup_1"),
+        "crm::lookup_2": ("crm", "lookup"),
+        "crm::lookup_3": ("crm", "lookup"),
+    }
+    assert [tool.name for tool in converted.conversation.tools] == [
+        "tool_search",
+        "crm::lookup",
+        "crm::lookup_1",
+        "crm::lookup_2",
+        "crm::lookup_3",
+    ]
+
+    assert ChatCompletionRequest(REQUEST).convert(options).namespace_tool_map is None
+    conversation = Conversation(messages=[UserMessage("hi")], thinking_mode=False)
+    assert ConversationRequest(conversation, ModelVersion.DeepseekV41Flash).namespace_tool_map is None
 
 def test_logprob_count_mismatch_closes_the_processor():
     tokenizer = Tokenizer.from_file(str(TOKENIZER_PATH))
