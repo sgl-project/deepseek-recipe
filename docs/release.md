@@ -32,6 +32,12 @@ version series and release procedures.
   With `publish` set, a dispatch on `dev` or an `sgl-v*` tag uploads that
   artifact to TestPyPI and then, once the `pypi` environment approves, to PyPI.
   Both uploads use trusted publishing and verify `SHA256SUMS` first.
+- [Rust release](../.github/workflows/rust-release.yml) runs on manual dispatch
+  only, in the `release` environment. It packages the four
+  [Rust crates](#rust-crates) together, then publishes them one at a time in
+  dependency order. `dry_run`, set by default, stops before the upload and runs
+  without a credential; `auth` selects the [credential](#credentials) of an
+  upload.
 
 ## One-time setup
 
@@ -54,8 +60,9 @@ Done by a repository admin and a PyPI owner, in this order:
    same on TestPyPI with environment `testpypi`. The first upload creates the
    project; then add the other maintainers as owners.
 
-The workflows need no secrets. Every job but the two uploads runs with a
-read-only token.
+CI and Wheels need no secrets, and every job of theirs but the two uploads runs
+with a read-only token. Rust release reads one secret, for the first upload of
+a crate; see [Credentials](#credentials).
 
 ## Release
 
@@ -111,18 +118,19 @@ too.
 
 ### Credentials
 
+- Create the `release` environment under the repository's **Settings →
+  Environments** before the first dispatch, limited like `pypi` above.
 - The first upload of each package needs a crates.io API token of an SGLang
   owner, because Trusted Publishing can only be configured for a crate that
-  already exists. Pass it through `CARGO_REGISTRY_TOKEN` in the shell that runs
-  `cargo publish`; do not write it to a file in the repository or to a workflow.
-  After the upload, add the other maintainers as owners and revoke the token.
-- Later releases use Trusted Publishing. On crates.io, under each crate's
-  **Settings → Trusted Publishing**, add a GitHub publisher with repository
-  owner `sgl-project`, repository name `deepseek-recipe`, workflow filename
-  `rust-release.yml`, and environment `release`. Create the `release`
-  environment under the repository's **Settings → Environments** first, limited
-  like `pypi` above. The `rust-release.yml` workflow is added separately; until
-  it exists, a release uses a token as for the first upload.
+  already exists. Store it as the repository secret
+  `SGL_DEEPSEEK_RECIPE_CRATES_IO_TOKEN` and dispatch with `auth=token`; do not
+  write it to a file in the repository or to a workflow. After the upload, add
+  the other maintainers as owners, revoke the token, and delete the secret.
+- Later releases dispatch with `auth=oidc`, which uses Trusted Publishing. On
+  crates.io, under each crate's **Settings → Trusted Publishing**, add a GitHub
+  publisher with repository owner `sgl-project`, repository name
+  `deepseek-recipe`, workflow filename `rust-release.yml`, and environment
+  `release`.
 
 ### Release
 
@@ -131,8 +139,14 @@ too.
    [Cargo.toml](../Cargo.toml), run `cargo update --workspace`, and move the
    `Unreleased` entries of the [changelog](../CHANGELOG.md) under the new
    version. Merge it into `dev`.
-2. On the merged commit, with a clean tree and the pinned toolchain, package the
-   four together:
+2. Dispatch a dry run on the merged commit:
+
+   ```sh
+   gh workflow run rust-release.yml --repo sgl-project/deepseek-recipe --ref dev
+   ```
+
+   With the pinned toolchain it packages the four together, then runs
+   `cargo publish --dry-run` with the same selection:
 
    ```sh
    cargo package --locked \
@@ -140,11 +154,18 @@ too.
        -p sgl-deepseek-recipe-encoding -p sgl-deepseek-recipe
    ```
 
-   Cargo builds each packaged crate against the others. Packaged alone, a crate
+   Cargo builds each packaged crate against the others. Selected alone, a crate
    whose dependency is not on crates.io at the new version fails with
-   `no matching package named …`.
-3. Publish in dependency order: macros, core, then encoding and
-   `sgl-deepseek-recipe`, which may swap.
+   `no matching package named …`, so a dry run cannot go one crate at a time.
+3. Publish, with `auth=token` instead for the first upload of a crate:
+
+   ```sh
+   gh workflow run rust-release.yml --repo sgl-project/deepseek-recipe --ref dev \
+       -f dry_run=false -f auth=oidc
+   ```
+
+   After packaging the four together, it runs one command per crate, in this
+   order, and stops at the first failure:
 
    ```sh
    cargo publish --locked -p sgl-deepseek-recipe-macros
@@ -153,9 +174,14 @@ too.
    cargo publish --locked -p sgl-deepseek-recipe
    ```
 
-   Each command verifies the crate against crates.io and waits until the new
-   version is in the index. If it times out while waiting, check the crate's
-   page on crates.io before retrying.
+   Each command resolves the crate's `sgl-*` dependencies on crates.io, builds
+   it, uploads it, and waits until the new version is in the index; only then
+   does the next command start. Crates uploaded before a failure stay
+   published, and a second dispatch cannot get past them because their version
+   already exists. If a command times out while waiting, check the crate's
+   page on crates.io. Then publish the remaining crates with the commands
+   above, in order, from a clean checkout of the same commit with
+   `CARGO_REGISTRY_TOKEN` set to an owner's token.
 4. Verify from the registry alone, in a new directory outside this repository,
    with no `path` dependencies and no `[patch]`:
 
