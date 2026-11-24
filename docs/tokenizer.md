@@ -23,8 +23,11 @@ constant needs a tokenizer that assigns the image token the same token ID.
 Add the dependencies to your application:
 
 ```sh
-cargo add deepseek-recipe@0.2 deepseek-recipe-encoding@0.2 serde_json@1 tokenizers@0.23
+cargo add sgl-deepseek-recipe@0.2.1 sgl-deepseek-recipe-encoding@0.2.1 serde_json@1 tokenizers@0.23
 ```
+
+The libraries are imported as `deepseek_recipe` and `deepseek_recipe_encoding`;
+see the [README](../README.md#rust) for keeping the upstream dependency keys.
 
 Save this as `src/main.rs`. The tokenizer path is relative to the working
 directory, so run the application from this repository's root with

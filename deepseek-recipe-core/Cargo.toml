@@ -1,12 +1,15 @@
 [package]
-name = "deepseek-recipe-core"
+name = "sgl-deepseek-recipe-core"
 version.workspace = true
 edition.workspace = true
 description = "Shared conversation, message, and tool types for DeepSeek models."
 readme.workspace = true
-documentation = "https://docs.rs/deepseek-recipe-core"
+documentation = "https://docs.rs/sgl-deepseek-recipe-core"
 license.workspace = true
 repository.workspace = true
+
+[lib]
+name = "deepseek_recipe_core"
 
 [dependencies]
 deepseek-recipe-macros = { workspace = true }

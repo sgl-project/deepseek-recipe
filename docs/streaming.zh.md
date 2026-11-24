@@ -9,9 +9,11 @@
 为你的应用添加依赖：
 
 ```sh
-cargo add deepseek-recipe@0.2 serde_json@1 tokio-stream@0.1
+cargo add sgl-deepseek-recipe@0.2.1 serde_json@1 tokio-stream@0.1
 cargo add tokio@1 --features macros,rt-multi-thread
 ```
+
+库以 `deepseek_recipe` 导入；如需保留上游的依赖 key，见 [README](../README.zh.md#rust)。
 
 将以下代码保存为 `src/main.rs`，然后运行 `cargo run`：
 
@@ -108,4 +110,4 @@ for chunk in chunks:
 processor.close()
 ```
 
-支持范围见[项目 README](../README.zh.md)，API 约定见 [Rust API 文档](https://docs.rs/deepseek-recipe)。
+支持范围见[项目 README](../README.zh.md)，API 约定见 [Rust API 文档](https://docs.rs/sgl-deepseek-recipe)。

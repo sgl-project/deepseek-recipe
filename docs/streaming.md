@@ -13,9 +13,12 @@ tokenizer is attached; see [Use with tokenizer](tokenizer.md#decoding).
 Add the dependencies to your application:
 
 ```sh
-cargo add deepseek-recipe@0.2 serde_json@1 tokio-stream@0.1
+cargo add sgl-deepseek-recipe@0.2.1 serde_json@1 tokio-stream@0.1
 cargo add tokio@1 --features macros,rt-multi-thread
 ```
+
+The library is imported as `deepseek_recipe`; see the
+[README](../README.md#rust) for keeping the upstream dependency key.
 
 Save this as `src/main.rs` and run `cargo run`:
 
@@ -113,4 +116,4 @@ processor.close()
 ```
 
 See the [project README](../README.md) for supported scope and the
-[Rust API documentation](https://docs.rs/deepseek-recipe) for API contracts.
+[Rust API documentation](https://docs.rs/sgl-deepseek-recipe) for API contracts.

@@ -96,8 +96,24 @@ print(rendered.prompt)
 #### Installation
 
 ```sh
-cargo add deepseek-recipe@0.2 deepseek-recipe-encoding@0.2 serde_json@1
+cargo add sgl-deepseek-recipe@0.2.1 sgl-deepseek-recipe-encoding@0.2.1 serde_json@1
 ```
+
+The `sgl-*` packages are SGLang's builds of the
+[upstream crates](https://github.com/deepseek-ai/deepseek-recipe). Their
+libraries keep the names `deepseek_recipe` and `deepseek_recipe_encoding`, so
+the `use` paths below work as written. To keep the upstream dependency keys in
+`Cargo.toml` as well, rename each dependency:
+
+```sh
+cargo add sgl-deepseek-recipe@0.2.1 --rename deepseek-recipe
+cargo add sgl-deepseek-recipe-encoding@0.2.1 --rename deepseek-recipe-encoding
+```
+
+This writes
+`deepseek-recipe = { version = "0.2.1", package = "sgl-deepseek-recipe" }`.
+Depend on either the `sgl-*` packages or the upstream ones, not both: they
+provide libraries of the same names.
 
 See the [development guide](docs/development.md) for source builds and image
 dependencies.
@@ -143,13 +159,16 @@ token IDs or decode backend token IDs, see
 
 ## Packages and example projects
 
+The four `sgl-*` packages are on crates.io; each is imported under its library
+name, such as `deepseek_recipe` for `sgl-deepseek-recipe`.
+
 | Package | Purpose |
 | --- | --- |
-| [`deepseek-recipe`](https://docs.rs/deepseek-recipe) | Protocol conversion and model output parsing. |
-| [`deepseek-recipe-core`](https://docs.rs/deepseek-recipe-core) | Shared conversation, message, image, and tool types. |
-| [`deepseek-recipe-encoding`](https://docs.rs/deepseek-recipe-encoding) | DeepSeek V4 and V4.1 prompt rendering and token encoding. |
-| [`deepseek-recipe-image`](https://docs.rs/deepseek-recipe-image) | Image fetching and preprocessing. |
-| [`deepseek-recipe-macros`](https://docs.rs/deepseek-recipe-macros) | The `prompt!` macro used by prompt rendering. |
+| [`sgl-deepseek-recipe`](https://docs.rs/sgl-deepseek-recipe) | Protocol conversion and model output parsing. |
+| [`sgl-deepseek-recipe-core`](https://docs.rs/sgl-deepseek-recipe-core) | Shared conversation, message, image, and tool types. |
+| [`sgl-deepseek-recipe-encoding`](https://docs.rs/sgl-deepseek-recipe-encoding) | DeepSeek V4 and V4.1 prompt rendering and token encoding. |
+| [`sgl-deepseek-recipe-macros`](https://docs.rs/sgl-deepseek-recipe-macros) | The `prompt!` macro used by prompt rendering. |
+| [`deepseek-recipe-image`](deepseek-recipe-image) | Image fetching and preprocessing, built from this repository. |
 | [`deepseek-recipe-python`](deepseek-recipe-python/README.md) | Python bindings, imported as `deepseek_recipe`. |
 | [encoding-decoding-demo](encoding-decoding-demo/README.md) | A web interface that renders prompts, highlights special tokens, and parses complete model output into Chat Completions, Responses, or Messages responses. |
 | [server-rs](server-rs/README.md) | An Axum API example with mock inference. |

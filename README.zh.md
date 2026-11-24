@@ -55,8 +55,17 @@ print(rendered.prompt)
 #### 安装
 
 ```sh
-cargo add deepseek-recipe@0.2 deepseek-recipe-encoding@0.2 serde_json@1
+cargo add sgl-deepseek-recipe@0.2.1 sgl-deepseek-recipe-encoding@0.2.1 serde_json@1
 ```
+
+`sgl-*` 包是 SGLang 对[上游 crate](https://github.com/deepseek-ai/deepseek-recipe) 的构建。库名仍是 `deepseek_recipe` 与 `deepseek_recipe_encoding`，下面示例中的 `use` 路径可以直接使用。如果还想在 `Cargo.toml` 中保留上游的依赖 key，请为每个依赖指定重命名：
+
+```sh
+cargo add sgl-deepseek-recipe@0.2.1 --rename deepseek-recipe
+cargo add sgl-deepseek-recipe-encoding@0.2.1 --rename deepseek-recipe-encoding
+```
+
+这会写入 `deepseek-recipe = { version = "0.2.1", package = "sgl-deepseek-recipe" }`。`sgl-*` 包与上游包提供同名的库，只依赖其中一组。
 
 源码构建与图片依赖见[开发指南](docs/development.md)。
 
@@ -97,13 +106,15 @@ Rust 和 Python 均支持将模型输出转换为流式响应，见[流式响应
 
 ## 包与示例
 
+四个 `sgl-*` 包发布在 crates.io 上，各自以库名导入，例如 `sgl-deepseek-recipe` 以 `deepseek_recipe` 导入。
+
 | 包 | 用途 |
 | --- | --- |
-| [`deepseek-recipe`](https://docs.rs/deepseek-recipe) | 协议转换与模型输出解析。 |
-| [`deepseek-recipe-core`](https://docs.rs/deepseek-recipe-core) | 共享的对话、消息、图片与工具类型。 |
-| [`deepseek-recipe-encoding`](https://docs.rs/deepseek-recipe-encoding) | DeepSeek V4 与 V4.1 的 prompt 渲染与 token 编码。 |
-| [`deepseek-recipe-image`](https://docs.rs/deepseek-recipe-image) | 图片拉取与预处理。 |
-| [`deepseek-recipe-macros`](https://docs.rs/deepseek-recipe-macros) | prompt 渲染使用的 `prompt!` 宏。 |
+| [`sgl-deepseek-recipe`](https://docs.rs/sgl-deepseek-recipe) | 协议转换与模型输出解析。 |
+| [`sgl-deepseek-recipe-core`](https://docs.rs/sgl-deepseek-recipe-core) | 共享的对话、消息、图片与工具类型。 |
+| [`sgl-deepseek-recipe-encoding`](https://docs.rs/sgl-deepseek-recipe-encoding) | DeepSeek V4 与 V4.1 的 prompt 渲染与 token 编码。 |
+| [`sgl-deepseek-recipe-macros`](https://docs.rs/sgl-deepseek-recipe-macros) | prompt 渲染使用的 `prompt!` 宏。 |
+| [`deepseek-recipe-image`](deepseek-recipe-image) | 图片拉取与预处理，从本仓库构建。 |
 | [`deepseek-recipe-python`](deepseek-recipe-python/README.md) | Python bindings，以 `deepseek_recipe` 导入。 |
 | [encoding-decoding-demo](encoding-decoding-demo/README.md) | 渲染 prompt、高亮 special token，并将完整模型输出解析为 Chat Completions、Responses 或 Messages 响应的 Web 界面。 |
 | [server-rs](server-rs/README.md) | 使用 mock 推理的 Axum API 示例。 |
