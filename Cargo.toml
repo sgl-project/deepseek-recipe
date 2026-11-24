@@ -12,11 +12,11 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 readme = "README.md"
 license = "MIT"
-repository = "https://github.com/deepseek-ai/deepseek-recipe"
+repository = "https://github.com/sgl-project/deepseek-recipe"
 
 [workspace.dependencies]
 aho-corasick = "1.1.3"
@@ -24,11 +24,11 @@ async-stream = "0.3.6"
 axum = "0.8.7"
 base64 = "0.22.1"
 data-url = "0.3.2"
-deepseek-recipe = { version = "0.2.0", path = "deepseek-recipe" }
-deepseek-recipe-core = { version = "0.2.0", path = "deepseek-recipe-core" }
-deepseek-recipe-encoding = { version = "0.2.0", path = "deepseek-recipe-encoding" }
+deepseek-recipe = { package = "sgl-deepseek-recipe", version = "0.2.1", path = "deepseek-recipe" }
+deepseek-recipe-core = { package = "sgl-deepseek-recipe-core", version = "0.2.1", path = "deepseek-recipe-core" }
+deepseek-recipe-encoding = { package = "sgl-deepseek-recipe-encoding", version = "0.2.1", path = "deepseek-recipe-encoding" }
 deepseek-recipe-image = { version = "0.2.0", path = "deepseek-recipe-image" }
-deepseek-recipe-macros = { version = "0.2.0", path = "deepseek-recipe-macros" }
+deepseek-recipe-macros = { package = "sgl-deepseek-recipe-macros", version = "0.2.1", path = "deepseek-recipe-macros" }
 futures = "0.3.31"
 image = { version = "0.25.0", default-features = false, features = [
     "gif",

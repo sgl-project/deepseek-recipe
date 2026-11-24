@@ -1,8 +1,9 @@
 # Releasing sgl-deepseek-recipe
 
-This repository publishes the Python bindings as `sgl-deepseek-recipe`, imported
-as `deepseek_recipe`. The Rust crates keep the workspace version; consumers pin
-them to a commit of this repository.
+This repository publishes the Python bindings to PyPI as `sgl-deepseek-recipe`,
+imported as `deepseek_recipe`, and four Rust crates to crates.io at the
+workspace version; see [Rust crates](#rust-crates). The two have separate
+version series and release procedures.
 
 ## Workflows
 
@@ -90,3 +91,87 @@ read-only token.
 
 A version that reaches PyPI cannot be uploaded again; a failed or rejected
 release takes the next version.
+
+## Rust crates
+
+Four packages are published to crates.io. Each keeps its library name, so
+`use deepseek_recipe::…` is unchanged for consumers.
+
+| Package | Library | Directory |
+| --- | --- | --- |
+| `sgl-deepseek-recipe-macros` | `deepseek_recipe_macros` | `deepseek-recipe-macros` |
+| `sgl-deepseek-recipe-core` | `deepseek_recipe_core` | `deepseek-recipe-core` |
+| `sgl-deepseek-recipe-encoding` | `deepseek_recipe_encoding` | `deepseek-recipe-encoding` |
+| `sgl-deepseek-recipe` | `deepseek_recipe` | `deepseek-recipe` |
+
+Always select these four with `-p`. `deepseek-recipe-image` and
+`deepseek-recipe-python` are workspace members that are not published to
+crates.io, and `cargo publish` without `-p`, or with `--workspace`, selects them
+too.
+
+### Credentials
+
+- The first upload of each package needs a crates.io API token of an SGLang
+  owner, because Trusted Publishing can only be configured for a crate that
+  already exists. Pass it through `CARGO_REGISTRY_TOKEN` in the shell that runs
+  `cargo publish`; do not write it to a file in the repository or to a workflow.
+  After the upload, add the other maintainers as owners and revoke the token.
+- Later releases use Trusted Publishing. On crates.io, under each crate's
+  **Settings → Trusted Publishing**, add a GitHub publisher with repository
+  owner `sgl-project`, repository name `deepseek-recipe`, workflow filename
+  `rust-release.yml`, and environment `release`. Create the `release`
+  environment under the repository's **Settings → Environments** first, limited
+  like `pypi` above. The `rust-release.yml` workflow is added separately; until
+  it exists, a release uses a token as for the first upload.
+
+### Release
+
+1. On a branch from `dev`, set `version` under `[workspace.package]` and the
+   `version` of the four `sgl-*` entries under `[workspace.dependencies]` in
+   [Cargo.toml](../Cargo.toml), run `cargo update --workspace`, and move the
+   `Unreleased` entries of the [changelog](../CHANGELOG.md) under the new
+   version. Merge it into `dev`.
+2. On the merged commit, with a clean tree and the pinned toolchain, package the
+   four together:
+
+   ```sh
+   cargo package --locked \
+       -p sgl-deepseek-recipe-macros -p sgl-deepseek-recipe-core \
+       -p sgl-deepseek-recipe-encoding -p sgl-deepseek-recipe
+   ```
+
+   Cargo builds each packaged crate against the others. Packaged alone, a crate
+   whose dependency is not on crates.io at the new version fails with
+   `no matching package named …`.
+3. Publish in dependency order: macros, core, then encoding and
+   `sgl-deepseek-recipe`, which may swap.
+
+   ```sh
+   cargo publish --locked -p sgl-deepseek-recipe-macros
+   cargo publish --locked -p sgl-deepseek-recipe-core
+   cargo publish --locked -p sgl-deepseek-recipe-encoding
+   cargo publish --locked -p sgl-deepseek-recipe
+   ```
+
+   Each command verifies the crate against crates.io and waits until the new
+   version is in the index. If it times out while waiting, check the crate's
+   page on crates.io before retrying.
+4. Verify from the registry alone, in a new directory outside this repository,
+   with no `path` dependencies and no `[patch]`:
+
+   ```sh
+   cargo new --edition 2024 recipe-registry-check
+   cd recipe-registry-check
+   cargo add sgl-deepseek-recipe@<version> --rename deepseek-recipe
+   cargo add sgl-deepseek-recipe-core@<version> --rename deepseek-recipe-core
+   cargo add sgl-deepseek-recipe-encoding@<version> sgl-deepseek-recipe-macros@<version> serde_json@1
+   ```
+
+   Save the Rust example of the [README](../README.md#rust) as `src/main.rs`,
+   add a `deepseek_recipe_core::prompt!("hi")` call to it, and run `cargo run`.
+   In the generated `Cargo.lock`, the four `sgl-*` packages must have a
+   `registry+` source at the new version, and no package may be named
+   `deepseek-recipe…`. Then check that the four docs.rs pages have built.
+
+A version that reaches crates.io cannot be replaced, only yanked; a failed or
+wrong release takes the next version.

@@ -1,14 +1,15 @@
 [package]
-name = "deepseek-recipe-macros"
+name = "sgl-deepseek-recipe-macros"
 version.workspace = true
 edition.workspace = true
 description = "Procedural macros for deepseek-recipe: the `prompt!` template macro and the `UntaggedDeserialize` derive."
 readme.workspace = true
-documentation = "https://docs.rs/deepseek-recipe-macros"
+documentation = "https://docs.rs/sgl-deepseek-recipe-macros"
 license.workspace = true
 repository.workspace = true
 
 [lib]
+name = "deepseek_recipe_macros"
 proc-macro = true
 
 [dependencies]

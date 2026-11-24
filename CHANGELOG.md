@@ -12,9 +12,15 @@ contain incompatible changes.
 ### Changed
 
 - The Python distribution is published as `sgl-deepseek-recipe` 0.2.1. The
-  import name stays `deepseek_recipe`, and the Rust crates stay at 0.2.0.
-  `sgl-deepseek-recipe` and `deepseek-recipe` install the same package; install
-  only one of them.
+  import name stays `deepseek_recipe`. `sgl-deepseek-recipe` and
+  `deepseek-recipe` install the same package; install only one of them.
+- The Rust packages `deepseek-recipe`, `deepseek-recipe-core`,
+  `deepseek-recipe-encoding`, and `deepseek-recipe-macros` are named
+  `sgl-deepseek-recipe`, `sgl-deepseek-recipe-core`,
+  `sgl-deepseek-recipe-encoding`, and `sgl-deepseek-recipe-macros`, at 0.2.1.
+  Their library names are unchanged: depend on them with
+  `deepseek-recipe = { package = "sgl-deepseek-recipe", version = "0.2.1" }` and
+  keep `use deepseek_recipe::…`.
 
 ### Added
 

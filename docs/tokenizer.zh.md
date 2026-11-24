@@ -11,8 +11,10 @@
 为你的应用添加依赖：
 
 ```sh
-cargo add deepseek-recipe@0.2 deepseek-recipe-encoding@0.2 serde_json@1 tokenizers@0.23
+cargo add sgl-deepseek-recipe@0.2.1 sgl-deepseek-recipe-encoding@0.2.1 serde_json@1 tokenizers@0.23
 ```
+
+库以 `deepseek_recipe` 与 `deepseek_recipe_encoding` 导入；如需保留上游的依赖 key，见 [README](../README.zh.md#rust)。
 
 将以下代码保存为 `src/main.rs`。tokenizer 路径相对于工作目录，因此请在本仓库根目录用 `cargo run --manifest-path path/to/your-app/Cargo.toml` 运行应用；在其他目录运行时，请改用绝对路径或你自己的 `tokenizer.json`：
 

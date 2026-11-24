@@ -54,8 +54,8 @@ Add these entries under `[dependencies]` in `../recipe-example/Cargo.toml`.
 Adjust the paths if the checkout directory has a different name.
 
 ```toml
-deepseek-recipe = { path = "../deepseek-recipe/deepseek-recipe" }
-deepseek-recipe-encoding = { path = "../deepseek-recipe/deepseek-recipe-encoding" }
+deepseek-recipe = { package = "sgl-deepseek-recipe", path = "../deepseek-recipe/deepseek-recipe" }
+deepseek-recipe-encoding = { package = "sgl-deepseek-recipe-encoding", path = "../deepseek-recipe/deepseek-recipe-encoding" }
 serde_json = "1"
 ```
 
@@ -84,7 +84,7 @@ The last command uses POSIX shell syntax. On PowerShell, set
 For protocol or prompt work without OpenCV, check the relevant packages:
 
 ```sh
-cargo test -p deepseek-recipe-core -p deepseek-recipe -p deepseek-recipe-encoding -p encoding-decoding-demo --locked
+cargo test -p sgl-deepseek-recipe-core -p sgl-deepseek-recipe -p sgl-deepseek-recipe-encoding -p encoding-decoding-demo --locked
 ```
 
 The image crate compiles without OpenCV when its default features are disabled:
@@ -143,8 +143,8 @@ The Python package includes a `py.typed` marker and
 For changes to the main library's rustdoc, check its examples and documentation:
 
 ```sh
-cargo test -p deepseek-recipe --doc --locked
-RUSTDOCFLAGS='-D warnings' cargo doc -p deepseek-recipe --no-deps --locked
+cargo test -p sgl-deepseek-recipe --doc --locked
+RUSTDOCFLAGS='-D warnings' cargo doc -p sgl-deepseek-recipe --no-deps --locked
 ```
 
 For other packages, run the same two commands with their `-p` names. Use the

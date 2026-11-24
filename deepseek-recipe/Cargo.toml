@@ -1,12 +1,15 @@
 [package]
-name = "deepseek-recipe"
+name = "sgl-deepseek-recipe"
 version.workspace = true
 edition.workspace = true
 description = "API request conversion and streamed output parsing for DeepSeek models."
 readme.workspace = true
-documentation = "https://docs.rs/deepseek-recipe"
+documentation = "https://docs.rs/sgl-deepseek-recipe"
 license.workspace = true
 repository.workspace = true
+
+[lib]
+name = "deepseek_recipe"
 
 [dependencies]
 async-stream = { workspace = true }
