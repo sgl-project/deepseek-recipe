@@ -1,0 +1,78 @@
+name: Rust release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Package and verify the four crates without uploading. Clear it to publish to crates.io.
+        type: boolean
+        default: true
+      auth:
+        description: >-
+          crates.io credential for an upload: "token" reads the
+          SGL_DEEPSEEK_RECIPE_CRATES_IO_TOKEN secret (first publication of a crate),
+          "oidc" uses Trusted Publishing (later releases)
+        type: choice
+        options:
+          - token
+          - oidc
+        default: token
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  PACKAGES: >-
+    sgl-deepseek-recipe-macros
+    sgl-deepseek-recipe-core
+    sgl-deepseek-recipe-encoding
+    sgl-deepseek-recipe
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: rustup toolchain install
+
+      - name: Package
+        run: |
+          read -ra packages <<< "$PACKAGES"
+          cargo package --locked "${packages[@]/#/--package=}"
+
+      - name: Request a crates.io token
+        id: auth
+        if: ${{ inputs.auth == 'oidc' && !inputs.dry_run }}
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+
+      - name: Publish
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
+          CARGO_REGISTRY_TOKEN: >-
+            ${{ !inputs.dry_run && (inputs.auth == 'oidc' && steps.auth.outputs.token
+            || secrets.SGL_DEEPSEEK_RECIPE_CRATES_IO_TOKEN) || '' }}
+        run: |
+          read -ra packages <<< "$PACKAGES"
+          if [[ "$DRY_RUN" == true ]]; then
+            unset CARGO_REGISTRY_TOKEN
+            # Selected alone, a crate resolves its sgl-* dependencies on crates.io,
+            # where the new version does not exist before the upload.
+            cargo publish --locked --dry-run "${packages[@]/#/--package=}"
+          else
+            for package in "${packages[@]}"; do
+              cargo publish --locked -p "$package"
+            done
+          fi
