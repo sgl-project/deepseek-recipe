@@ -114,6 +114,11 @@ pub struct ConversionOptions {
     ///
     /// Defaults to [`WebSearchBehavior::Drop`].
     pub responses_web_search: WebSearchBehavior,
+    /// Responses input items before this index already contain resolved search
+    /// results and must not inherit current deferred declarations.
+    ///
+    /// Defaults to zero.
+    pub responses_resolved_input_prefix: usize,
     /// Behavior for the Messages `web_search` server tool, its named tool
     /// choice, and its `server_tool_use` / `web_search_tool_result` blocks.
     ///
@@ -155,6 +160,7 @@ impl ConversionOptions {
             default_thinking_mode: true,
             reasoning_content_behavior: ReasoningContentBehavior::FillEmpty,
             responses_web_search: WebSearchBehavior::Drop,
+            responses_resolved_input_prefix: 0,
             messages_web_search: WebSearchBehavior::Reject,
             model_versions_by_name: HashMap::from([
                 ("DeepSeek-V4-Pro".to_string(), ModelVersion::DeepseekV4Pro),
@@ -289,6 +295,13 @@ impl ConversionOptions {
     #[must_use]
     pub fn with_responses_web_search(mut self, responses_web_search: WebSearchBehavior) -> Self {
         self.responses_web_search = responses_web_search;
+        self
+    }
+
+    /// Set how many Responses input items already have resolved search results.
+    #[must_use]
+    pub fn with_responses_resolved_input_prefix(mut self, items: usize) -> Self {
+        self.responses_resolved_input_prefix = items;
         self
     }
 

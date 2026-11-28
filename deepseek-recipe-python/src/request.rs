@@ -17,7 +17,7 @@ use serde_json::Value;
 
 use crate::conversation::PyConversation;
 use crate::error::request_error;
-use crate::json::python_to_json;
+use crate::json::{json_to_python, python_to_json};
 use crate::parsing::PyParsingOptions;
 use crate::response::{
     PyChatCompletionChunkGenerator, PyMessagesChunkGenerator, PyResponsesChunkGenerator,
@@ -150,6 +150,7 @@ impl PyConversionOptions {
         default_thinking_mode=true,
         reasoning_content_behavior=PyReasoningContentBehavior::FillEmpty,
         responses_web_search=PyWebSearchBehavior::Drop,
+        responses_resolved_input_prefix=0,
         messages_web_search=PyWebSearchBehavior::Reject,
         thinking_max_tokens_upper_bound=DEFAULT_MAX_TOKENS_UPPER_BOUND,
         non_thinking_max_tokens_upper_bound=DEFAULT_MAX_TOKENS_UPPER_BOUND
@@ -158,6 +159,7 @@ impl PyConversionOptions {
         default_thinking_mode: bool,
         reasoning_content_behavior: PyReasoningContentBehavior,
         responses_web_search: PyWebSearchBehavior,
+        responses_resolved_input_prefix: usize,
         messages_web_search: PyWebSearchBehavior,
         thinking_max_tokens_upper_bound: u32,
         non_thinking_max_tokens_upper_bound: u32,
@@ -167,6 +169,7 @@ impl PyConversionOptions {
                 .with_default_thinking_mode(default_thinking_mode)
                 .with_reasoning_content_behavior(reasoning_content_behavior.to_core())
                 .with_responses_web_search(responses_web_search.to_core())
+                .with_responses_resolved_input_prefix(responses_resolved_input_prefix)
                 .with_messages_web_search(messages_web_search.to_core())
                 .with_thinking_max_tokens_upper_bound(thinking_max_tokens_upper_bound)
                 .with_non_thinking_max_tokens_upper_bound(non_thinking_max_tokens_upper_bound),
@@ -294,6 +297,22 @@ impl PyConversionOptions {
     #[getter]
     fn responses_web_search(&self) -> PyResult<PyWebSearchBehavior> {
         PyWebSearchBehavior::from_core(self.inner.responses_web_search)
+    }
+
+    /// Responses input items before this index already have resolved results.
+    #[getter]
+    fn responses_resolved_input_prefix(&self) -> usize {
+        self.inner.responses_resolved_input_prefix
+    }
+
+    /// Construct options with an already-resolved Responses input prefix.
+    fn with_responses_resolved_input_prefix(&self, items: usize) -> Self {
+        Self {
+            inner: self
+                .inner
+                .clone()
+                .with_responses_resolved_input_prefix(items),
+        }
     }
 
     /// Messages web-search behavior, defaulting to `Reject`.
@@ -489,6 +508,34 @@ impl PyConversationRequest {
     #[getter]
     fn namespace_tool_map(&self) -> Option<HashMap<String, (String, String)>> {
         self.inner.response_options.namespace_tool_map.clone()
+    }
+
+    /// Resolved Responses search-result definitions by original input index.
+    #[getter]
+    fn resolved_search_results(
+        &self,
+        py: Python<'_>,
+    ) -> PyResult<Option<HashMap<usize, Vec<Py<PyAny>>>>> {
+        if self
+            .inner
+            .response_options
+            .resolved_search_results
+            .is_empty()
+        {
+            return Ok(None);
+        }
+        self.inner
+            .response_options
+            .resolved_search_results
+            .iter()
+            .map(|(index, tools)| {
+                let value = serde_json::to_value(tools)
+                    .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+                let tools = json_to_python(py, &value)?.extract(py)?;
+                Ok((*index, tools))
+            })
+            .collect::<PyResult<_>>()
+            .map(Some)
     }
 
     /// Resolve the `max_tokens` to send to the backend.

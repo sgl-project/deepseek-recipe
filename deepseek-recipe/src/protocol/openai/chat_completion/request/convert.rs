@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use deepseek_recipe_core::conversation::{Conversation, ResponseFormat};
@@ -9,7 +9,7 @@ use deepseek_recipe_core::special_tokens::{SpecialToken, SpecialTokens};
 use deepseek_recipe_core::tools::{ToolChoice, ToolDefinition};
 
 use crate::protocol::client_tools::{
-    ClientToolChoice, ClientToolDeclaration, convert_client_tools,
+    ClientToolChoice, ClientToolDeclaration, convert_client_tools, normalize_message_tools,
 };
 use crate::protocol::image::{
     UNSUPPORTED_IMAGE_PLACEHOLDER, file_data_image_source, file_id_unsupported, image_url_source,
@@ -32,7 +32,7 @@ use super::super::response::{ChatCompletionChunkGenerator, ChatCompletionRespons
 use super::schema::{
     ChatCompletionRequest, ChatCompletionRequestContent, ChatCompletionRequestContentBlock,
     ChatCompletionRequestMessage, ChatCompletionResponseFormat, ChatCompletionStopSequences,
-    ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolChoiceOption,
+    ChatCompletionStreamOptions, ChatCompletionToolChoiceOption,
 };
 
 impl ProtocolRequest for ChatCompletionRequest {
@@ -51,23 +51,36 @@ impl ProtocolRequest for ChatCompletionRequest {
             self.thinking.as_ref().map(|thinking| thinking.r#type),
             self.reasoning_effort,
         );
-        let tools = self.tools.unwrap_or_default();
+        let mut tools: Vec<ClientToolDeclaration> = self
+            .tools
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tool| ClientToolDeclaration {
+                name: tool.function.name,
+                description: tool.function.description,
+                parameters: tool.function.parameters,
+                strict: tool.function.strict,
+                defer_loading: false,
+            })
+            .collect();
         for (index, tool) in tools.iter().enumerate() {
-            validate_tool_name(&tool.function.name, &format!("tools[{index}].function"))?;
+            validate_tool_name(&tool.name, &format!("tools[{index}].function"))?;
         }
-        let has_tools = !tools.is_empty();
-        let has_tool_context = has_tools
-            || self.messages.iter().any(|message| {
-                matches!(
-                    message,
-                    ChatCompletionRequestMessage::Assistant {
-                        tool_calls: Some(_),
-                        ..
-                    } | ChatCompletionRequestMessage::Tool { .. }
-                )
-            });
+        let has_historical_tool_calls = self.messages.iter().any(|message| {
+            matches!(
+                message,
+                ChatCompletionRequestMessage::Assistant {
+                    tool_calls: Some(_),
+                    ..
+                } | ChatCompletionRequestMessage::Tool { .. }
+            )
+        });
         let image_token = options.special_tokens.token(SpecialToken::Image);
-        let mut messages = transform_messages(self.messages, image_token, model_version)?;
+        let (mut messages, message_tools, message_tool_origins) =
+            transform_messages(self.messages, image_token, model_version)?;
+        tools.extend(message_tools);
+        let has_tools = !tools.is_empty();
+        let has_tool_context = has_tools || has_historical_tool_calls;
         normalize_reasoning_content(
             &mut messages,
             thinking_mode,
@@ -90,6 +103,15 @@ impl ProtocolRequest for ChatCompletionRequest {
             ));
         }
         let (tools, tool_choice) = convert_tools(tools, self.tool_choice, thinking_mode)?;
+        if !model_version.supports_mid_conversation_system()
+            && let Some(tool) = tools.iter().find(|tool| tool.defer_loading)
+        {
+            let index = message_tool_origins[&tool.name];
+            return Err(ConversionError::bad_request(format!(
+                ".messages[{index}].tools: this model cannot render tools declared in messages"
+            )));
+        }
+        normalize_message_tools(&mut messages, &tools);
         if json_mode && is_prefix_continuation {
             return Err(ConversionError::bad_request(
                 "response_format json_object should not be used with prefix",
@@ -253,7 +275,7 @@ fn validate_prefix(messages: &[InputMessage]) -> Result<bool, ConversionError> {
 /// returns no tool definitions; [`convert_client_tools`] resolves the other
 /// choices.
 fn convert_tools(
-    tools: Vec<ChatCompletionTool>,
+    tools: Vec<ClientToolDeclaration>,
     choice: Option<ChatCompletionToolChoiceOption>,
     thinking_mode: bool,
 ) -> Result<(Vec<ToolDefinition>, ToolChoice), ConversionError> {
@@ -263,16 +285,6 @@ fn convert_tools(
     if tools.is_empty() {
         return Ok((Vec::new(), ToolChoice::Auto));
     }
-    let tools = tools
-        .into_iter()
-        .map(|tool| ClientToolDeclaration {
-            name: tool.function.name,
-            description: tool.function.description,
-            parameters: tool.function.parameters,
-            strict: tool.function.strict,
-            defer_loading: false,
-        })
-        .collect();
     let choice = match choice {
         Some(ChatCompletionToolChoiceOption::Named { function, .. }) => {
             ClientToolChoice::Named(function.name)
@@ -397,10 +409,10 @@ fn strip_billing_header(mut content: Prompt) -> Prompt {
 /// Convert the request messages into conversation messages.
 ///
 /// A `system` message becomes a system message without an Anthropic billing
-/// header, or nothing when its content is then empty. A `user` message becomes
-/// a user message, and a `latest_reminder` message a reminder. An `assistant`
-/// message becomes an assistant message with its tool calls, followed by one
-/// tool message per `tool` message that answers those calls.
+/// header, with its tool declarations attached, or nothing when both are empty.
+/// A `user` message becomes a user message, and a `latest_reminder` message a
+/// reminder. An `assistant` message becomes an assistant message with its tool
+/// calls, followed by one tool message per `tool` message that answers those calls.
 ///
 /// # Errors
 ///
@@ -413,29 +425,55 @@ fn strip_billing_header(mut content: Prompt) -> Prompt {
 /// does not follow such an `assistant` message; or when, for a model with
 /// image input, an `image_url` or `file` block is invalid, including a system,
 /// user, or tool data URL that fails [`validate_data_url_sources`].
+type TransformedMessages = (
+    Vec<InputMessage>,
+    Vec<ClientToolDeclaration>,
+    HashMap<String, usize>,
+);
+
 fn transform_messages(
     messages: Vec<ChatCompletionRequestMessage>,
     image_token: &str,
     model_version: ModelVersion,
-) -> Result<Vec<InputMessage>, ConversionError> {
+) -> Result<TransformedMessages, ConversionError> {
     if messages.is_empty() {
         return Err(ConversionError::bad_request("Empty input messages"));
     }
 
     let mut result = Vec::new();
+    let mut declarations = Vec::new();
+    let mut message_tool_origins = HashMap::new();
     let mut message_iter = messages.into_iter().enumerate();
     while let Some((index, message)) = message_iter.next() {
         match message {
-            ChatCompletionRequestMessage::System { content, .. } => {
+            ChatCompletionRequestMessage::System { content, tools, .. } => {
                 let (content, image_sources) =
                     content.into_content(index, image_token, model_version)?;
                 let content = strip_billing_header(content);
-                if !content.is_empty() {
+                let tools = tools.unwrap_or_default();
+                let mut added_tools = Vec::new();
+                for (tool_index, tool) in tools.into_iter().enumerate() {
+                    validate_tool_name(
+                        &tool.function.name,
+                        &format!(".messages[{index}].tools[{tool_index}].function"),
+                    )?;
+                    let declaration = ClientToolDeclaration {
+                        name: tool.function.name,
+                        description: tool.function.description,
+                        parameters: tool.function.parameters,
+                        strict: tool.function.strict,
+                        defer_loading: true,
+                    };
+                    message_tool_origins.insert(declaration.name.clone(), index);
+                    added_tools.push(ToolDefinition::from(&declaration));
+                    declarations.push(declaration);
+                }
+                if !content.is_empty() || !added_tools.is_empty() {
                     validate_data_url_sources(&image_sources, &format!(".messages[{index}]"))?;
                     result.push(InputMessage::System {
                         content,
                         image_sources,
-                        tools: None,
+                        tools: (!added_tools.is_empty()).then_some(added_tools),
                     });
                 }
             }
@@ -563,7 +601,7 @@ fn transform_messages(
         }
     }
 
-    Ok(result)
+    Ok((result, declarations, message_tool_origins))
 }
 
 /// Validate stop sequences and streaming options.
@@ -608,5 +646,46 @@ mod tests {
         );
         assert_eq!(strip("x-anthropic-billing-header: a"), "");
         assert_eq!(strip("system"), "system");
+    }
+
+    #[test]
+    fn system_message_tools_convert_at_their_position() {
+        let converted = serde_json::from_value::<ChatCompletionRequest>(serde_json::json!({
+            "model": "DeepSeek-V4.1-Flash",
+            "thinking": {"type": "disabled"},
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "developer",
+                    "content": "",
+                    "tools": [{
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"id": {"type": "string"}}
+                            },
+                            "strict": true
+                        }
+                    }]
+                }
+            ]
+        }))
+        .expect("the request deserializes")
+        .convert(ConversionOptions::new())
+        .expect("message tools convert");
+
+        assert_eq!(converted.conversation.tools.len(), 1);
+        let tool = &converted.conversation.tools[0];
+        assert!(tool.defer_loading);
+        assert_eq!(tool.strict, Some(true));
+        assert_eq!(tool.parameters["required"], serde_json::json!(["id"]));
+        let InputMessage::System {
+            tools: Some(tools), ..
+        } = &converted.conversation.messages[1]
+        else {
+            panic!("the empty declaring message keeps its tools");
+        };
+        assert_eq!(tools, std::slice::from_ref(tool));
     }
 }

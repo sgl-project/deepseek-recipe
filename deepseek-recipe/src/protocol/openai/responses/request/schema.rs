@@ -281,11 +281,15 @@ pub enum ResponsesTool {
         name: String,
         description: Option<String>,
         tools: Vec<ResponsesNamespaceTool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        defer_loading: Option<bool>,
     },
     /// A custom tool. Conversion accepts only `apply_patch`, which it converts
     /// to a function tool, and rejects any other custom tool name.
     Custom {
         name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        defer_loading: Option<bool>,
     },
     ToolSearch {
         execution: Option<ResponsesToolSearchExecution>,
@@ -329,6 +333,8 @@ pub struct ResponsesFunctionTool {
     /// strict tool parameters. Conversion passes the flag through in the tool
     /// definition; enforcement during inference belongs to the caller.
     pub strict: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defer_loading: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

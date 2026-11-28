@@ -419,6 +419,7 @@ class ConversionOptions:
         default_thinking_mode: bool = True,
         reasoning_content_behavior: ReasoningContentBehavior = ReasoningContentBehavior.FillEmpty,
         responses_web_search: WebSearchBehavior = WebSearchBehavior.Drop,
+        responses_resolved_input_prefix: int = 0,
         messages_web_search: WebSearchBehavior = WebSearchBehavior.Reject,
         thinking_max_tokens_upper_bound: int = 393216,
         non_thinking_max_tokens_upper_bound: int = 393216,
@@ -459,6 +460,9 @@ class ConversionOptions:
     def responses_web_search(self) -> WebSearchBehavior:
         """Responses web-search behavior, defaulting to `Drop`."""
     @property
+    def responses_resolved_input_prefix(self) -> int:
+        """Responses input items before this index already have resolved results."""
+    @property
     def messages_web_search(self) -> WebSearchBehavior:
         """Messages web-search behavior, defaulting to `Reject`."""
     @property
@@ -474,6 +478,8 @@ class ConversionOptions:
         self, responses_web_search: WebSearchBehavior
     ) -> ConversionOptions:
         """Construct options with the supplied Responses web-search behavior."""
+    def with_responses_resolved_input_prefix(self, items: int) -> ConversionOptions:
+        """Construct options with an already-resolved Responses input prefix."""
     def with_messages_web_search(
         self, messages_web_search: WebSearchBehavior
     ) -> ConversionOptions:
@@ -525,6 +531,12 @@ class ConversationRequest:
         Each function name maps to `(namespace, local name)`, as conversion
         assigned them, including the tools that search results load. `None` for
         a request that Responses conversion did not produce.
+        """
+    @property
+    def resolved_search_results(self) -> dict[int, list[dict[str, Any]]] | None:
+        """Resolved Responses search-result definitions by input-array index.
+
+        `None` when conversion produced no metadata entries.
         """
     def resolve_max_tokens(self, prompt_tokens: int, context_limit: int) -> int:
         """Resolve the `max_tokens` to send to the backend.

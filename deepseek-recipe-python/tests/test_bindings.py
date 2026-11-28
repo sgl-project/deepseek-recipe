@@ -223,6 +223,79 @@ def test_deferred_loading_follows_model_version(model, deferred):
     assert '"name": "lookup"' in prompt
 
 
+def test_messages_strict_and_output_config_format():
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    converted = MessagesRequest(
+        {
+            "model": "DeepSeek-V4.1-Flash",
+            "messages": [{"role": "user", "content": "Answer briefly"}],
+            "thinking": {"type": "disabled"},
+            "tools": [
+                {
+                    "name": "lookup",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                    },
+                    "strict": True,
+                }
+            ],
+            "output_config": {
+                "effort": "high",
+                "format": {"type": "json_schema", "schema": schema},
+            },
+        }
+    ).convert(ConversionOptions())
+
+    assert converted.conversation.thinking_mode is False
+    tool = converted.conversation.tools[0]
+    assert tool.strict is True
+    assert tool.parameters["required"] == ["id"]
+    assert tool.parameters["additionalProperties"] is False
+    assert converted.conversation.response_format == "json_schema"
+    assert converted.conversation.response_schema == schema
+    constraint = converted.inference_options.output_constraint
+    assert constraint.kind == "json"
+    assert json.loads(constraint.schema)["required"] == ["answer"]
+
+
+def test_responses_resolved_search_results_and_prefix():
+    tool = {
+        "type": "function",
+        "name": "weather",
+        "description": "Weather",
+        "parameters": {"type": "object"},
+        "strict": True,
+        "defer_loading": True,
+    }
+    body = {
+        "model": "DeepSeek-V4.1-Flash",
+        "input": [
+            {"role": "user", "content": "Find weather"},
+            {"type": "tool_search_call", "call_id": "s", "arguments": {"query": "weather"}},
+            {"type": "tool_search_output", "call_id": "s", "tools": [tool]},
+        ],
+        "tools": [{"type": "tool_search", "execution": "client"}, tool],
+    }
+    first = ResponsesRequest(body).convert(ConversionOptions())
+    assert first.resolved_search_results[2][0]["description"] == "Weather"
+    assert "defer_loading" not in first.resolved_search_results[2][0]
+
+    options = ConversionOptions(responses_resolved_input_prefix=3)
+    assert options.responses_resolved_input_prefix == 3
+    second = ResponsesRequest(body).convert(options)
+    assert second.resolved_search_results is None
+    sparse = json.loads(json.dumps(body))
+    sparse["input"][2]["tools"] = [{"type": "function", "name": "weather"}]
+    stored = ResponsesRequest(sparse).convert(options)
+    assert stored.conversation.tools[1].parameters == {}
+    encoding = DeepseekV41Encoding()
+    first_prompt = encoding.render_conversation(first.conversation).prompt
+    second_prompt = encoding.render_conversation(second.conversation).prompt
+    assert first_prompt == second_prompt
+    assert "defer_loading" not in first_prompt
+
+
 def test_web_search_conversion_options():
     defaults = ConversionOptions()
     constructed = ConversionOptions(
@@ -944,6 +1017,8 @@ def test_responses_namespace_tool_map():
     assert list(namespace_tool_map.values()) == [("ns", "f")]
     (function_name,) = namespace_tool_map
     assert "ns" in function_name and "f" in function_name
+    prefixed = ConversionOptions(responses_resolved_input_prefix=1)
+    assert request.namespace_tool_map(prefixed) == namespace_tool_map
 
     converted = request.convert(ConversionOptions())
     assert [tool.name for tool in converted.conversation.tools] == [function_name]

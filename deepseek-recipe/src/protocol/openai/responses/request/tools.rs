@@ -41,6 +41,195 @@ struct RegisteredTool {
     strict: Option<bool>,
 }
 
+#[derive(Default)]
+struct DormantTools {
+    functions: HashMap<String, ResponsesFunctionTool>,
+    custom: HashSet<String>,
+    namespaces: HashMap<String, Option<String>>,
+    members: HashMap<ResponsesNamespaceToolName, ResponsesFunctionTool>,
+}
+
+impl DormantTools {
+    fn declare(&mut self, tool: ResponsesTool) -> Result<Option<ResponsesTool>, ConversionError> {
+        match tool {
+            ResponsesTool::Function(function) if function.defer_loading == Some(true) => {
+                self.declare_function(function)?;
+                Ok(None)
+            }
+            ResponsesTool::Custom {
+                name,
+                defer_loading: Some(true),
+            } => {
+                if self.functions.contains_key(&name) {
+                    return Err(deferred_kind_error(&name));
+                }
+                self.custom.insert(name);
+                Ok(None)
+            }
+            ResponsesTool::Namespace {
+                name,
+                description,
+                tools,
+                defer_loading,
+            } => {
+                let defer_all = defer_loading == Some(true);
+                let mut active = Vec::new();
+                let mut has_dormant = false;
+                for tool in tools {
+                    match tool {
+                        ResponsesNamespaceTool::Function(function)
+                            if defer_all || function.defer_loading == Some(true) =>
+                        {
+                            self.declare_member(&name, function)?;
+                            has_dormant = true;
+                        }
+                        tool => active.push(tool),
+                    }
+                }
+                if has_dormant {
+                    self.namespaces.insert(name.clone(), description.clone());
+                }
+                Ok((!active.is_empty()).then_some(ResponsesTool::Namespace {
+                    name,
+                    description,
+                    tools: active,
+                    defer_loading: None,
+                }))
+            }
+            tool => Ok(Some(tool)),
+        }
+    }
+
+    fn declare_function(&mut self, function: ResponsesFunctionTool) -> Result<(), ConversionError> {
+        if self.custom.contains(&function.name) {
+            return Err(deferred_kind_error(&function.name));
+        }
+        if let Some(existing) = self.functions.get(&function.name)
+            && function_identity(existing) != function_identity(&function)
+        {
+            return Err(ConversionError::bad_request(format!(
+                "tools defers '{}' more than once, with different definitions",
+                function.name
+            )));
+        }
+        self.functions.insert(function.name.clone(), function);
+        Ok(())
+    }
+
+    fn declare_member(
+        &mut self,
+        namespace: &str,
+        function: ResponsesFunctionTool,
+    ) -> Result<(), ConversionError> {
+        let key = ResponsesNamespaceToolName {
+            namespace: namespace.to_owned(),
+            local_name: function.name.clone(),
+        };
+        if let Some(existing) = self.members.get(&key)
+            && function_identity(existing) != function_identity(&function)
+        {
+            return Err(ConversionError::bad_request(format!(
+                "tools defers '{}.{}' more than once, with different definitions",
+                key.namespace, key.local_name
+            )));
+        }
+        self.members.insert(key, function);
+        Ok(())
+    }
+
+    fn resolve(&self, tool: ResponsesTool) -> Result<ResponsesTool, ConversionError> {
+        match tool {
+            ResponsesTool::Function(function) => {
+                if self.custom.contains(&function.name) {
+                    return Err(deferred_kind_error(&function.name));
+                }
+                Ok(ResponsesTool::Function(
+                    self.resolve_function(function, None),
+                ))
+            }
+            ResponsesTool::Custom {
+                name,
+                defer_loading: _,
+            } => {
+                if self.functions.contains_key(&name) {
+                    return Err(deferred_kind_error(&name));
+                }
+                Ok(ResponsesTool::Custom {
+                    name,
+                    defer_loading: None,
+                })
+            }
+            ResponsesTool::Namespace {
+                name,
+                description,
+                tools,
+                defer_loading: _,
+            } => {
+                let description =
+                    description.or_else(|| self.namespaces.get(&name).cloned().unwrap_or_default());
+                let tools = tools
+                    .into_iter()
+                    .map(|tool| match tool {
+                        ResponsesNamespaceTool::Function(function) => {
+                            ResponsesNamespaceTool::Function(
+                                self.resolve_function(function, Some(&name)),
+                            )
+                        }
+                        tool => tool,
+                    })
+                    .collect();
+                Ok(ResponsesTool::Namespace {
+                    name,
+                    description,
+                    tools,
+                    defer_loading: None,
+                })
+            }
+            tool => Ok(tool),
+        }
+    }
+
+    fn resolve_function(
+        &self,
+        mut function: ResponsesFunctionTool,
+        namespace: Option<&str>,
+    ) -> ResponsesFunctionTool {
+        let declared = match namespace {
+            Some(namespace) => self.members.get(&ResponsesNamespaceToolName {
+                namespace: namespace.to_owned(),
+                local_name: function.name.clone(),
+            }),
+            None => self.functions.get(&function.name),
+        };
+        if let Some(declared) = declared {
+            if function.description.is_none() {
+                function.description = declared.description.clone();
+            }
+            if function.parameters.is_none() {
+                function.parameters = declared.parameters.clone();
+            }
+            if function.strict.is_none() {
+                function.strict = declared.strict;
+            }
+        }
+        function.defer_loading = None;
+        function
+    }
+}
+
+fn function_identity(function: &ResponsesFunctionTool) -> serde_json::Value {
+    let mut function = function.clone();
+    function.defer_loading = None;
+    function.strict = Some(function.strict.unwrap_or(false));
+    serde_json::to_value(function).expect("a function tool serializes")
+}
+
+fn deferred_kind_error(name: &str) -> ConversionError {
+    ConversionError::bad_request(format!(
+        "deferred tool '{name}' is referenced with different tool kinds"
+    ))
+}
+
 /// The tool declarations of a request after name validation, with namespace
 /// tools flattened into uniquely named functions.
 pub(super) struct ResponsesToolSet {
@@ -78,16 +267,57 @@ impl ResponsesToolSet {
         model_version: ModelVersion,
         input: Option<&ResponsesInput>,
     ) -> Result<Self, ConversionError> {
-        let mut groups = vec![(None, tools.unwrap_or_default())];
+        let input_items = match input {
+            Some(ResponsesInput::Items(items)) => Some(items),
+            _ => None,
+        };
+        let resolved_prefix = options.responses_resolved_input_prefix;
+        if resolved_prefix > input_items.map_or(0, Vec::len) {
+            return Err(ConversionError::bad_request(
+                "responses_resolved_input_prefix exceeds the Responses input length",
+            ));
+        }
+        let mut dormant = DormantTools::default();
+        let initial = tools
+            .unwrap_or_default()
+            .into_iter()
+            .map(|tool| dormant.declare(tool))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        if !model_version.supports_mid_conversation_system()
+            && (!dormant.functions.is_empty()
+                || !dormant.custom.is_empty()
+                || !dormant.members.is_empty())
+        {
+            return Err(ConversionError::bad_request(
+                "defer_loading requires a model that supports mid-conversation tool declarations",
+            ));
+        }
+        let mut groups = vec![(None, initial)];
+        let mut resolved_search_results = HashMap::new();
         if model_version.supports_mid_conversation_system()
-            && let Some(ResponsesInput::Items(items)) = input
+            && let Some(items) = input_items
         {
             for (index, item) in items.iter().enumerate() {
                 if let ResponsesInputItem::Typed(ResponsesTypedInputItem::ToolSearchOutput(
                     output,
                 )) = item
                 {
-                    groups.push((Some(index), output.tools.clone()));
+                    let tools = if index < resolved_prefix {
+                        output.tools.clone()
+                    } else {
+                        let tools = output
+                            .tools
+                            .iter()
+                            .cloned()
+                            .map(|tool| dormant.resolve(tool))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        resolved_search_results.insert(index, tools.clone());
+                        tools
+                    };
+                    groups.push((Some(index), tools));
                 }
             }
         }
@@ -106,7 +336,10 @@ impl ResponsesToolSet {
                 })
                 .collect(),
             model_version,
-            response_options: ResponseOptions::default(),
+            response_options: ResponseOptions {
+                resolved_search_results,
+                ..ResponseOptions::default()
+            },
         };
         for (item_index, tools) in groups {
             let start = converted.client_tools.len();
@@ -132,6 +365,7 @@ impl ResponsesToolSet {
                         name,
                         description,
                         tools,
+                        defer_loading: _,
                     } => {
                         validate_tool_name(&name, &path)?;
                         let mut inner_names = HashMap::new();
@@ -190,7 +424,7 @@ impl ResponsesToolSet {
                             converted.register(kind, declaration);
                         }
                     }
-                    ResponsesTool::Custom { name } => {
+                    ResponsesTool::Custom { name, .. } => {
                         if name != "apply_patch" {
                             return Err(ConversionError::bad_request(format!(
                                 "Unsupported custom tool: '{name}'. Only 'apply_patch' is supported."
