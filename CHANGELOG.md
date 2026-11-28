@@ -24,9 +24,19 @@ contain incompatible changes.
 
 ### Added
 
+- Chat Completions system and developer messages can declare function tools in
+  `tools`. V4.1 renders them at that message and marks them deferred; V4 rejects
+  declarations that survive tool-choice filtering.
+- Responses function, custom, and namespace declarations can defer loading. A
+  search result inherits the matching declaration and loads it at its position;
+  already-resolved input prefixes are protected by
+  `ConversionOptions.responses_resolved_input_prefix`.
 - Python `ConversationRequest.namespace_tool_map` returns the namespace tool
   names that Responses conversion assigned, including those of tools that
-  search results load.
+  search results load. `ConversationRequest.resolved_search_results` returns
+  resolved definitions by Responses input index for durable history storage.
+- Messages preserves strict tool schemas and renders `output_config.format` as
+  an actual JSON Schema response constraint.
 
 ### Fixed
 

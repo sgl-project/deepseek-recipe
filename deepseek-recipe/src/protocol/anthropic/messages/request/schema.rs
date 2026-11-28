@@ -218,6 +218,7 @@ pub enum MessagesTool {
         description: Option<String>,
         /// The input schema; a missing schema is `null` and fails validation.
         input_schema: serde_json::Value,
+        strict: Option<bool>,
         defer_loading: Option<bool>,
     },
 }
@@ -263,4 +264,11 @@ pub struct MessagesOutputConfig {
     /// Requested reasoning effort. `none` disables thinking unless `thinking`
     /// enables it.
     pub effort: Option<RequestReasoningEffort>,
+    pub format: Option<MessagesOutputFormat>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MessagesOutputFormat {
+    JsonSchema { schema: serde_json::Value },
 }

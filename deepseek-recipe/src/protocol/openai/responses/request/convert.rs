@@ -32,9 +32,10 @@ use crate::stream::{ParsingOptions, ThinkingInitialStage};
 
 use super::schema::{
     ResponsesContentBlock, ResponsesInput, ResponsesInputImage, ResponsesInputItem,
-    ResponsesInputMessage, ResponsesMessageContent, ResponsesMessageRole, ResponsesReasoningItem,
-    ResponsesRequest, ResponsesTextConfig, ResponsesTextFormat, ResponsesTool,
-    ResponsesToolCallOutputContent, ResponsesToolCallOutputItem, ResponsesTypedInputItem,
+    ResponsesInputMessage, ResponsesMessageContent, ResponsesMessageRole, ResponsesNamespaceTool,
+    ResponsesReasoningItem, ResponsesRequest, ResponsesTextConfig, ResponsesTextFormat,
+    ResponsesTool, ResponsesToolCallOutputContent, ResponsesToolCallOutputItem,
+    ResponsesTypedInputItem,
 };
 use super::tools::ResponsesToolSet;
 
@@ -150,7 +151,26 @@ impl ResponsesToolCallOutputContent {
 
 /// Serialize discovered tools as plain text, flattening namespace tools and
 /// preserving their namespace name and description.
-fn tool_search_output_content(tools: Vec<ResponsesTool>) -> serde_json::Result<Prompt> {
+fn tool_search_output_content(mut tools: Vec<ResponsesTool>) -> serde_json::Result<Prompt> {
+    for tool in &mut tools {
+        match tool {
+            ResponsesTool::Function(function) => function.defer_loading = None,
+            ResponsesTool::Namespace {
+                defer_loading,
+                tools,
+                ..
+            } => {
+                *defer_loading = None;
+                for tool in tools {
+                    if let ResponsesNamespaceTool::Function(function) = tool {
+                        function.defer_loading = None;
+                    }
+                }
+            }
+            ResponsesTool::Custom { defer_loading, .. } => *defer_loading = None,
+            _ => {}
+        }
+    }
     let mut flat_tools = Vec::new();
     for tool in tools {
         match tool {
@@ -158,6 +178,7 @@ fn tool_search_output_content(tools: Vec<ResponsesTool>) -> serde_json::Result<P
                 name,
                 description,
                 tools,
+                defer_loading: _,
             } => {
                 let namespace = serde_json::json!({
                     "name": name,
@@ -691,7 +712,13 @@ fn transform_input_items(
                         &mut pending_call_ids,
                         &mut resolved_call_ids,
                     )?;
-                    let content = tool_search_output_content(output.tools).map_err(|error| {
+                    let result_tools = tools
+                        .response_options
+                        .resolved_search_results
+                        .get(&item_index)
+                        .cloned()
+                        .unwrap_or(output.tools);
+                    let content = tool_search_output_content(result_tools).map_err(|error| {
                         ConversionError::bad_request(format!("input[{item_index}]: {error}"))
                     })?;
                     if let Some(declarations) = tools
@@ -928,8 +955,9 @@ impl ResponsesRequest {
                 })
                 .collect()
         });
+        let options = options.clone().with_responses_resolved_input_prefix(0);
         Ok(
-            ResponsesToolSet::from_declarations(tools, options, model_version, None)?
+            ResponsesToolSet::from_declarations(tools, &options, model_version, None)?
                 .namespace_tool_map(),
         )
     }
@@ -1352,6 +1380,55 @@ mod tests {
             convert_err(search_request(tools(&[user_search]), &discovered)),
             "Tool names must be unique."
         );
+    }
+
+    #[test]
+    fn deferred_tools_load_from_resolved_results() {
+        let mut deferred = function("lookup", true.into(), false.into());
+        deferred["strict"] = true.into();
+        deferred["defer_loading"] = true.into();
+        let declared_namespace = namespace(std::slice::from_ref(&deferred));
+        let result = serde_json::json!([
+            {"type": "function", "name": "lookup"},
+            {"type": "namespace", "name": "crm", "tools": [
+                {"type": "function", "name": "lookup"}
+            ]}
+        ]);
+        let request = convert(search_request(
+            serde_json::json!([
+                {"type": "tool_search", "execution": "client"},
+                deferred,
+                declared_namespace
+            ]),
+            &[result],
+        ))
+        .expect("deferred references inherit their declarations and load");
+
+        assert_eq!(
+            names(&request.conversation.tools),
+            ["tool_search", "lookup", "crm::lookup"]
+        );
+        assert!(request.conversation.tools[1].defer_loading);
+        assert!(request.conversation.tools[2].defer_loading);
+        assert_eq!(request.conversation.tools[1].strict, Some(true));
+        assert_eq!(request.conversation.tools[2].strict, Some(true));
+        assert_eq!(
+            loaded_names(&request.conversation.messages),
+            [["lookup", "crm::lookup"]]
+        );
+        let resolved = &request.response_options.resolved_search_results[&2];
+        let function = serde_json::to_value(&resolved[0]).unwrap();
+        let namespace = serde_json::to_value(&resolved[1]).unwrap();
+        assert_eq!(function["description"], "Look up an order.");
+        assert_eq!(function["strict"], true);
+        assert_eq!(namespace["description"], "CRM.");
+        assert!(function.get("defer_loading").is_none());
+        assert!(namespace.get("defer_loading").is_none());
+        for content in tool_results(&request.conversation.messages) {
+            assert!(content.contains("Look up an order."));
+            assert!(content.contains("CRM."));
+            assert!(!content.contains("defer_loading"));
+        }
     }
 
     #[test]

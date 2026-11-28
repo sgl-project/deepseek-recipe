@@ -22,19 +22,20 @@ use crate::protocol::output_constraint::resolve_output_constraint;
 use crate::protocol::reasoning::resolve_thinking_mode;
 use crate::protocol::reasoning_content::normalize_reasoning_content;
 use crate::protocol::validation::{
-    RawInferenceOptions, validate_stop_sequences, validate_tool_name,
+    RawInferenceOptions, validate_response_schema, validate_stop_sequences, validate_tool_name,
 };
 use crate::request::{
-    ConversationRequest, ConversionError, ConversionOptions, ModelVersion, ProtocolRequest,
-    WebSearchBehavior,
+    ConversationRequest, ConversionError, ConversionOptions, ModelVersion, OutputConstraint,
+    ProtocolRequest, WebSearchBehavior,
 };
 use crate::stream::{ParsingOptions, ThinkingInitialStage};
 
 use super::super::response::{MessagesChunkGenerator, MessagesResponse};
 use super::schema::{
     MessagesContent, MessagesContentBlock, MessagesDocumentSource, MessagesImageSource,
-    MessagesMessage, MessagesRequest, MessagesSystemBlock, MessagesSystemContent, MessagesTool,
-    MessagesToolChoice, MessagesToolReference, MessagesToolResultBlock, MessagesToolResultContent,
+    MessagesMessage, MessagesOutputFormat, MessagesRequest, MessagesSystemBlock,
+    MessagesSystemContent, MessagesTool, MessagesToolChoice, MessagesToolReference,
+    MessagesToolResultBlock, MessagesToolResultContent,
 };
 
 /// The tools of a request after name validation.
@@ -92,8 +93,31 @@ impl ProtocolRequest for MessagesRequest {
         })?;
         let (tools, tool_choice) = convert_tools(tool_set, self.tool_choice, thinking_mode)?;
         normalize_message_tools(&mut messages, &tools);
-        let output_constraint =
-            resolve_output_constraint(&tools, None, tool_choice, &ResponseFormat::Text, false)?;
+        let (response_format, constraint_format) =
+            match self.output_config.and_then(|config| config.format) {
+                Some(MessagesOutputFormat::JsonSchema { schema }) => {
+                    let constraint_schema = validate_response_schema(&schema, Some(true))?;
+                    (
+                        ResponseFormat::JsonSchema(schema),
+                        ResponseFormat::JsonSchema(constraint_schema),
+                    )
+                }
+                None => (ResponseFormat::Text, ResponseFormat::Text),
+            };
+        let output_constraint = if matches!(response_format, ResponseFormat::Text) {
+            // Messages allows mixed strictness; an explicit output schema constrains
+            // the answer, not the tool-call items that may precede it.
+            if tools.is_empty() || tool_choice == ToolChoice::None {
+                None
+            } else {
+                Some(OutputConstraint::ToolCalls {
+                    tools: tools.clone(),
+                    required: tool_choice == ToolChoice::Required,
+                })
+            }
+        } else {
+            resolve_output_constraint(&[], None, ToolChoice::None, &constraint_format, true)?
+        };
         let stop_sequences = self.stop_sequences.unwrap_or_default();
         validate_stop_sequences(&stop_sequences)?;
         let mut inference_options = RawInferenceOptions {
@@ -124,7 +148,7 @@ impl ProtocolRequest for MessagesRequest {
                 tools,
                 tool_choice,
                 reasoning_effort,
-                ..Conversation::default()
+                response_format,
             },
             inference_options,
             parsing_options,
@@ -196,6 +220,7 @@ fn partition_tools(
                 name,
                 description,
                 input_schema,
+                strict,
                 defer_loading,
             } => {
                 validate_tool_name(&name, &format!("tools[{index}]"))?;
@@ -203,7 +228,7 @@ fn partition_tools(
                     name,
                     description,
                     parameters: Some(input_schema),
-                    strict: None,
+                    strict,
                     defer_loading: model_version.supports_mid_conversation_system()
                         && defer_loading == Some(true),
                 });

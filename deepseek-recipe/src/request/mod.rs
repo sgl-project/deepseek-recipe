@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use deepseek_recipe_core::conversation::{Conversation, ReasoningEffort};
 use deepseek_recipe_core::tools::ToolDefinition;
 
+use crate::protocol::openai::responses::request::ResponsesTool;
 use crate::protocol::openai::responses::response::ResponsesEcho;
 use crate::response::ProtocolResponse;
 use crate::stream::ParsingOptions;
@@ -132,6 +133,7 @@ pub struct ResponseOptions {
     pub custom_tool_names: HashSet<String>,
     pub client_tool_search: bool,
     pub namespace_tool_map: Option<HashMap<String, (String, String)>>,
+    pub resolved_search_results: HashMap<usize, Vec<ResponsesTool>>,
     pub responses_echo: Option<ResponsesEcho>,
 }
 

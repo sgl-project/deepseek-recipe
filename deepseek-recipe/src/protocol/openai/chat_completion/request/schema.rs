@@ -63,9 +63,12 @@ pub struct ChatCompletionRequest {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "role", rename_all = "snake_case")]
 pub enum ChatCompletionRequestMessage {
+    #[serde(alias = "developer")]
     System {
         content: ChatCompletionRequestContent,
         name: Option<String>,
+        /// Tools introduced at this message, rendered here rather than up front.
+        tools: Option<Vec<ChatCompletionTool>>,
     },
     User {
         content: ChatCompletionRequestContent,
@@ -190,13 +193,15 @@ pub struct ChatCompletionResponseFormatJsonSchema {
 
 #[derive(Debug, Deserialize)]
 pub struct ChatCompletionTool {
+    #[serde(default)]
     pub r#type: ChatCompletionToolType,
     pub function: ChatCompletionFunctionDefinition,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChatCompletionToolType {
+    #[default]
     Function,
 }
 
